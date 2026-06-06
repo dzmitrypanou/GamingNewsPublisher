@@ -3,21 +3,95 @@ use crate::services::{deepseek, rss_fetcher, settings_store};
 use crate::AppState;
 use anyhow::Result;
 
+const AI_DUPLICATE_CHECK_LIMIT: i64 = 50;
+
 pub async fn do_fetch(state: &AppState) -> Result<FetchResult> {
+    if !state.fetch_runtime.try_begin() {
+        anyhow::bail!("Сбор новостей уже выполняется");
+    }
+
+    let result = do_fetch_inner(state).await;
+    let snapshot = match &result {
+        Ok(r) => r.clone(),
+        Err(e) => FetchResult {
+            scanned_items: 0,
+            new_posts: 0,
+            processed_posts: 0,
+            skipped_duplicates: 0,
+            errors: vec![e.to_string()],
+        },
+    };
+    state.fetch_runtime.finish(snapshot);
+    result
+}
+
+async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
     let settings = settings_store::load_settings(&state.app_handle)?;
     let sources = state.db.get_sources()?;
+    let mut scanned_items = 0i64;
     let mut new_posts = 0i64;
     let mut processed_posts = 0i64;
+    let mut skipped_duplicates = 0i64;
     let mut errors = Vec::new();
+    let items_per_source = settings.fetch_items_per_source.clamp(1, 50) as usize;
+    let ai_duplicate_enabled =
+        settings.ai_duplicate_check && !settings.deepseek_api_key.is_empty();
 
     for mut source in sources {
         if !source.enabled {
             continue;
         }
 
-        match rss_fetcher::fetch_rss_items(&state.http_client, &source.url, 10).await {
+        match rss_fetcher::fetch_rss_items(&state.http_client, &source.url, items_per_source).await
+        {
             Ok(items) => {
+                scanned_items += items.len() as i64;
                 for item in items {
+                    if state.db.is_url_seen(&item.link).unwrap_or(false) {
+                        continue;
+                    }
+
+                    if ai_duplicate_enabled {
+                        match state.db.get_recent_posts(AI_DUPLICATE_CHECK_LIMIT) {
+                            Ok(recent_posts) => {
+                                match deepseek::find_ai_duplicate_among_posts(
+                                    &state.http_client,
+                                    &settings,
+                                    &item.title,
+                                    &item.description,
+                                    &recent_posts,
+                                )
+                                .await
+                                {
+                                    Ok(Some(dup)) => {
+                                        let _ = state.db.record_ai_duplicate(
+                                            &item.link,
+                                            &item.title,
+                                            &item.description,
+                                            Some(dup.kept_post_id),
+                                            Some(&dup.kept_title),
+                                            &dup.analysis,
+                                        );
+                                        let _ =
+                                            state.db.record_parsed_item(&item.link, &item.title);
+                                        skipped_duplicates += 1;
+                                        continue;
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => {
+                                        errors.push(format!(
+                                            "AI дубль '{}': {}",
+                                            item.title, e
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                errors.push(format!("DB: {}", e));
+                            }
+                        }
+                    }
+
                     let mut image_url = item.image_url.clone();
 
                     if image_url.is_none() {
@@ -32,8 +106,9 @@ pub async fn do_fetch(state: &AppState) -> Result<FetchResult> {
                         image_url.as_deref(),
                         source.category_id,
                     ) {
-                        Ok(Some(post_id)) => {
+                        Ok(post_id) => {
                             new_posts += 1;
+                            let mut ai_processed = false;
 
                             if settings.auto_ai_process && !settings.deepseek_api_key.is_empty() {
                                 if let Ok(post) = state.db.get_post(post_id) {
@@ -59,19 +134,10 @@ pub async fn do_fetch(state: &AppState) -> Result<FetchResult> {
                                                 &ai_result.title,
                                                 &ai_result.text,
                                                 &hashtags,
+                                                settings.auto_approve,
                                             );
                                             processed_posts += 1;
-
-                                            if settings.auto_publish {
-                                                if let Err(e) =
-                                                    crate::publish::do_publish(state, post_id).await
-                                                {
-                                                    errors.push(format!(
-                                                        "Auto-publish {}: {}",
-                                                        post_id, e
-                                                    ));
-                                                }
-                                            }
+                                            ai_processed = true;
                                         }
                                         Err(e) => {
                                             errors.push(format!(
@@ -82,8 +148,11 @@ pub async fn do_fetch(state: &AppState) -> Result<FetchResult> {
                                     }
                                 }
                             }
+
+                            if settings.auto_approve && !ai_processed {
+                                let _ = state.db.approve_post(post_id);
+                            }
                         }
-                        Ok(None) => {}
                         Err(e) => {
                             errors.push(format!("DB {}: {}", source.name, e));
                         }
@@ -102,8 +171,10 @@ pub async fn do_fetch(state: &AppState) -> Result<FetchResult> {
     state.db.set_last_fetch_at()?;
 
     Ok(FetchResult {
+        scanned_items,
         new_posts,
         processed_posts,
+        skipped_duplicates,
         errors,
     })
 }

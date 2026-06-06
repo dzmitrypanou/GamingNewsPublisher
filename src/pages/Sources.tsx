@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2, Eye, Loader2, Check } from "lucide-react";
+import { Plus, Trash2, Eye, Loader2, Check, Rss, AlertCircle } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +17,7 @@ import {
   previewSource,
 } from "@/lib/tauri";
 import type { Source, Category, PresetSource, RssPreviewItem } from "@/lib/types";
+import { dialog } from "@/lib/dialog";
 import { formatDate } from "@/lib/utils";
 
 export function Sources() {
@@ -29,6 +31,7 @@ export function Sources() {
   const [selectedPresets, setSelectedPresets] = useState<Set<string>>(new Set());
   const [preview, setPreview] = useState<RssPreviewItem[] | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   const load = async () => {
@@ -60,7 +63,7 @@ export function Sources() {
       setNewName("");
       await load();
     } catch (e) {
-      alert(String(e));
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
     }
   };
 
@@ -70,7 +73,15 @@ export function Sources() {
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("Удалить источник?")) return;
+    if (
+      !(await dialog.confirm("Источник будет удалён из списка.", {
+        title: "Удалить источник?",
+        confirmText: "Удалить",
+        destructive: true,
+      }))
+    ) {
+      return;
+    }
     await deleteSource(id);
     await load();
   };
@@ -79,11 +90,14 @@ export function Sources() {
     if (selectedPresets.size === 0) return;
     try {
       const added = await addPresetSources(Array.from(selectedPresets));
-      alert(`Добавлено источников: ${added}`);
+      await dialog.alert(`Добавлено источников: ${added}`, {
+        title: "Готово",
+        variant: "success",
+      });
       setSelectedPresets(new Set());
       await load();
     } catch (e) {
-      alert(String(e));
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
     }
   };
 
@@ -91,12 +105,13 @@ export function Sources() {
     setPreviewLoading(true);
     setPreviewUrl(url);
     setPreview(null);
+    setPreviewError(null);
     try {
       const items = await previewSource(url);
       setPreview(items);
     } catch (e) {
-      setPreview([]);
-      alert(String(e));
+      setPreview(null);
+      setPreviewError(String(e));
     } finally {
       setPreviewLoading(false);
     }
@@ -252,7 +267,11 @@ export function Sources() {
             </CardHeader>
             <CardContent className="space-y-2">
               {sources.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Нет источников</p>
+                <EmptyState
+                  icon={<Rss className="h-5 w-5" />}
+                  title="Нет источников"
+                  description="Добавьте RSS-ленту вручную или выберите из предустановленных"
+                />
               ) : (
                 sources.map((s) => (
                   <div
@@ -292,7 +311,7 @@ export function Sources() {
             </CardContent>
           </Card>
 
-          {(preview !== null || previewLoading) && (
+          {(preview !== null || previewLoading || previewError) && (
             <Card>
               <CardHeader>
                 <CardTitle>Предпросмотр</CardTitle>
@@ -300,7 +319,16 @@ export function Sources() {
               </CardHeader>
               <CardContent>
                 {previewLoading ? (
-                  <Loader2 className="h-6 w-6 animate-spin" />
+                  <div className="flex justify-center py-12">
+                    <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+                  </div>
+                ) : previewError ? (
+                  <EmptyState
+                    variant="error"
+                    icon={<AlertCircle className="h-5 w-5" />}
+                    title="Не удалось загрузить ленту"
+                    description={previewError}
+                  />
                 ) : preview && preview.length > 0 ? (
                   <div className="space-y-3">
                     {preview.map((item, i) => (
@@ -313,7 +341,11 @@ export function Sources() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-muted-foreground">Записей не найдено</p>
+                  <EmptyState
+                    icon={<Rss className="h-5 w-5" />}
+                    title="Записей не найдено"
+                    description="RSS-лента пуста или не содержит записей для предпросмотра"
+                  />
                 )}
               </CardContent>
             </Card>

@@ -1,5 +1,6 @@
 use crate::models::{PresetSource, RssPreviewItem};
 use anyhow::{Context, Result};
+use atom_syndication::Feed as AtomFeed;
 use regex::Regex;
 use reqwest::Client;
 use rss::Channel;
@@ -94,16 +95,34 @@ pub struct RssItem {
 }
 
 pub async fn fetch_rss_items(client: &Client, url: &str, limit: usize) -> Result<Vec<RssItem>> {
+    let bytes = fetch_feed_bytes(client, url).await?;
+    parse_feed_bytes(&bytes, limit)
+}
+
+async fn fetch_feed_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
     let response = client
         .get(url)
         .header("User-Agent", "GamingNewsPublisher/0.1")
         .send()
         .await
-        .context("Failed to fetch RSS")?;
+        .context("Не удалось загрузить RSS")?;
 
-    let bytes = response.bytes().await?;
-    let channel = Channel::read_from(&bytes[..]).context("Failed to parse RSS")?;
+    Ok(response.bytes().await?.to_vec())
+}
 
+fn parse_feed_bytes(bytes: &[u8], limit: usize) -> Result<Vec<RssItem>> {
+    if let Ok(channel) = Channel::read_from(bytes) {
+        return Ok(parse_rss_channel(&channel, limit));
+    }
+
+    if let Ok(feed) = AtomFeed::read_from(bytes) {
+        return Ok(parse_atom_feed(&feed, limit));
+    }
+
+    anyhow::bail!("Не удалось разобрать RSS или Atom")
+}
+
+fn parse_rss_channel(channel: &Channel, limit: usize) -> Vec<RssItem> {
     let mut items = Vec::new();
     for entry in channel.items().iter().take(limit) {
         let title = entry.title().unwrap_or("").to_string();
@@ -120,7 +139,6 @@ pub async fn fetch_rss_items(client: &Client, url: &str, limit: usize) -> Result
             .to_string();
 
         let image_url = extract_image_from_entry(entry);
-
         let pub_date = entry.pub_date().map(|s| s.to_string());
 
         if !link.is_empty() {
@@ -133,8 +151,75 @@ pub async fn fetch_rss_items(client: &Client, url: &str, limit: usize) -> Result
             });
         }
     }
+    items
+}
 
-    Ok(items)
+fn parse_atom_feed(feed: &AtomFeed, limit: usize) -> Vec<RssItem> {
+    let mut items = Vec::new();
+
+    for entry in feed.entries().iter().take(limit) {
+        let title = entry.title().value.clone();
+
+        let link = entry
+            .links()
+            .iter()
+            .find(|l| {
+                let rel = l.rel();
+                rel.is_empty() || rel == "alternate"
+            })
+            .or_else(|| entry.links().first())
+            .map(|l| l.href().to_string())
+            .unwrap_or_default();
+
+        let raw_content = entry
+            .content()
+            .and_then(|c| c.value.clone())
+            .or_else(|| entry.summary().map(|s| s.value.clone()))
+            .unwrap_or_default();
+
+        let description = clean_html(&raw_content);
+        let image_url = extract_image_from_atom_entry(entry, &raw_content);
+        let pub_date = entry
+            .published()
+            .map(|d| d.to_rfc3339())
+            .or_else(|| Some(entry.updated().to_rfc3339()));
+
+        if !link.is_empty() {
+            items.push(RssItem {
+                title,
+                description,
+                link,
+                image_url,
+                pub_date,
+            });
+        }
+    }
+
+    items
+}
+
+fn extract_image_from_atom_entry(
+    entry: &atom_syndication::Entry,
+    raw_content: &str,
+) -> Option<String> {
+    if let Some(media) = entry.extensions().get("media") {
+        if let Some(thumbnail) = media.get("thumbnail") {
+            for ext in thumbnail {
+                if let Some(url) = ext.attrs().get("url") {
+                    return Some(url.to_string());
+                }
+            }
+        }
+        if let Some(content) = media.get("content") {
+            for ext in content {
+                if let Some(url) = ext.attrs().get("url") {
+                    return Some(url.to_string());
+                }
+            }
+        }
+    }
+
+    extract_img_from_html(raw_content)
 }
 
 pub async fn preview_rss(client: &Client, url: &str) -> Result<Vec<RssPreviewItem>> {

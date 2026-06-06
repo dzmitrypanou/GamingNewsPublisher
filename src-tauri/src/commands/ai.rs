@@ -30,7 +30,13 @@ pub async fn process_post_with_ai(
 
     state
         .db
-        .update_post_ai(id, &ai_result.title, &ai_result.text, &hashtags)
+        .update_post_ai(
+            id,
+            &ai_result.title,
+            &ai_result.text,
+            &hashtags,
+            settings.auto_approve,
+        )
         .map_err(|e| e.to_string())?;
 
     state.db.get_post(id).map_err(|e| e.to_string())

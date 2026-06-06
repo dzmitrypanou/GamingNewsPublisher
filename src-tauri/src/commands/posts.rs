@@ -1,4 +1,4 @@
-use crate::models::{DashboardStats, Post, PublishLog, PublishResult};
+use crate::models::{DashboardStats, Post, PublishLog, PublishResult, UnpublishResult};
 use crate::AppState;
 use tauri::State;
 
@@ -41,6 +41,17 @@ pub fn get_published_posts(state: State<'_, std::sync::Arc<AppState>>) -> Result
 }
 
 #[tauri::command]
+pub fn get_recent_published_posts(
+    state: State<'_, std::sync::Arc<AppState>>,
+    limit: Option<i64>,
+) -> Result<Vec<Post>, String> {
+    state
+        .db
+        .get_recent_published_posts(limit.unwrap_or(5))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn publish_post(
     state: State<'_, std::sync::Arc<AppState>>,
     id: i64,
@@ -48,4 +59,24 @@ pub async fn publish_post(
     crate::publish::do_publish(&state, id)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn unpublish_post(
+    state: State<'_, std::sync::Arc<AppState>>,
+    id: i64,
+) -> Result<UnpublishResult, String> {
+    crate::publish::do_unpublish(&state, id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_queue_posts(state: State<'_, std::sync::Arc<AppState>>) -> Result<i64, String> {
+    state.db.delete_queue_posts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn reset_all_data(state: State<'_, std::sync::Arc<AppState>>) -> Result<(), String> {
+    state.db.reset_all_data().map_err(|e| e.to_string())
 }

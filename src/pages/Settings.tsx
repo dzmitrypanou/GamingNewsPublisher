@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Save, TestTube } from "lucide-react";
+import { Loader2, Save, TestTube, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,13 +9,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import {
   getSettings,
   saveSettings,
+  resetAllData,
   testVk,
   testTelegram,
   testDeepseek,
 } from "@/lib/tauri";
+import { dialog } from "@/lib/dialog";
 import type { AppSettings, ApiTestResult } from "@/lib/types";
 
-const DEFAULT_PROMPT = `Перепиши игровую новость для соцсетей VK и Telegram.
+const DEFAULT_PROMPT = `Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
+Все поля ответа строго на {language}.
 Формат ответа JSON:
 {
   "title": "короткий цепляющий заголовок (до 80 символов)",
@@ -32,9 +35,16 @@ const defaultSettings: AppSettings = {
   deepseek_api_key: "",
   deepseek_model: "deepseek-chat",
   ai_prompt_template: DEFAULT_PROMPT,
+  auto_fetch: true,
   fetch_interval_minutes: 30,
+  fetch_items_per_source: 10,
   auto_publish: false,
+  auto_publish_interval_minutes: 60,
+  auto_publish_jitter_seconds_min: 0,
+  auto_publish_jitter_seconds_max: 60,
   auto_ai_process: true,
+  auto_approve: true,
+  ai_duplicate_check: false,
   post_language: "ru",
 };
 
@@ -45,6 +55,7 @@ export function Settings() {
   const [testResults, setTestResults] = useState<Record<string, ApiTestResult>>({});
   const [testing, setTesting] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     getSettings()
@@ -58,13 +69,51 @@ export function Settings() {
     setSaved(false);
   };
 
+  const handleResetAll = async () => {
+    if (
+      !(await dialog.confirm(
+        "Будут удалены все посты, история публикаций и журнал парсинга. Повторный сбор новостей станет возможен с нуля.",
+        {
+          title: "СБРОСИТЬ ВСЕ?",
+          confirmText: "Сбросить",
+          destructive: true,
+          variant: "error",
+        }
+      ))
+    ) {
+      return;
+    }
+    if (
+      !(await dialog.confirm("Это действие необратимо. Продолжить?", {
+        title: "Подтверждение",
+        confirmText: "Да, удалить всё",
+        destructive: true,
+        variant: "error",
+      }))
+    ) {
+      return;
+    }
+    setResetting(true);
+    try {
+      await resetAllData();
+      await dialog.alert("Все данные очищены. Можно снова собирать новости.", {
+        title: "Готово",
+        variant: "success",
+      });
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaving(true);
     try {
       await saveSettings(settings);
       setSaved(true);
     } catch (e) {
-      alert(String(e));
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
     } finally {
       setSaving(false);
     }
@@ -108,7 +157,7 @@ export function Settings() {
         </Button>
       </div>
 
-      <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="text-[#0077FF]">VKontakte</CardTitle>
@@ -205,8 +254,25 @@ export function Settings() {
                 className="font-mono text-xs"
               />
               <p className="text-xs text-muted-foreground">
-                Переменные: {"{title}"}, {"{description}"}, {"{category}"}
+                Переменные: {"{title}"}, {"{description}"}, {"{category}"}, {"{language}"}
               </p>
+            </div>
+            <div className="flex items-center justify-between rounded-lg border border-border p-4">
+              <div>
+                <Label>Проверка дублей с помощью AI</Label>
+                <p className="text-xs text-muted-foreground">
+                  При сборе и публикации дубли определяет только DeepSeek. Без этой
+                  опции семантические дубли не проверяются.
+                </p>
+                {!settings.deepseek_api_key && (
+                  <p className="mt-1 text-xs text-warning">Укажите API ключ DeepSeek</p>
+                )}
+              </div>
+              <Switch
+                checked={settings.ai_duplicate_check}
+                disabled={!settings.deepseek_api_key}
+                onCheckedChange={(v) => update("ai_duplicate_check", v)}
+              />
             </div>
             <TestButton
               platform="deepseek"
@@ -223,15 +289,46 @@ export function Settings() {
             <CardDescription>Автоматизация и интервалы</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Автопарсинг</Label>
+                <p className="text-xs text-muted-foreground">
+                  Автоматически собирать новости из RSS по расписанию
+                </p>
+              </div>
+              <Switch
+                checked={settings.auto_fetch}
+                onCheckedChange={(v) => update("auto_fetch", v)}
+              />
+            </div>
+            {settings.auto_fetch && (
+              <div className="space-y-2">
+                <Label>Интервал автопарсинга (мин)</Label>
+                <Input
+                  type="number"
+                  min={5}
+                  max={1440}
+                  value={settings.fetch_interval_minutes}
+                  onChange={(e) =>
+                    update("fetch_interval_minutes", parseInt(e.target.value) || 30)
+                  }
+                />
+              </div>
+            )}
             <div className="space-y-2">
-              <Label>Интервал автопарсинга (мин)</Label>
+              <Label>Новостей с каждого источника</Label>
               <Input
                 type="number"
-                min={5}
-                max={1440}
-                value={settings.fetch_interval_minutes}
-                onChange={(e) => update("fetch_interval_minutes", parseInt(e.target.value) || 30)}
+                min={1}
+                max={50}
+                value={settings.fetch_items_per_source}
+                onChange={(e) =>
+                  update("fetch_items_per_source", parseInt(e.target.value) || 10)
+                }
               />
+              <p className="text-xs text-muted-foreground">
+                За один сбор проверяется: источники × это число (например, 10 × 10 = 100 записей)
+              </p>
             </div>
             <div className="flex items-center justify-between">
               <div>
@@ -245,14 +342,118 @@ export function Settings() {
             </div>
             <div className="flex items-center justify-between">
               <div>
+                <Label>Автоодобрение</Label>
+                <p className="text-xs text-muted-foreground">
+                  Автоматически одобрять посты для очереди публикации
+                </p>
+              </div>
+              <Switch
+                checked={settings.auto_approve}
+                onCheckedChange={(v) => update("auto_approve", v)}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
                 <Label>Автопубликация</Label>
-                <p className="text-xs text-muted-foreground">Публиковать в VK и Telegram без подтверждения</p>
+                <p className="text-xs text-muted-foreground">
+                  Публиковать готовые посты в VK и Telegram по расписанию
+                </p>
               </div>
               <Switch
                 checked={settings.auto_publish}
                 onCheckedChange={(v) => update("auto_publish", v)}
               />
             </div>
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+              <div className="mb-3">
+                <Label className="text-destructive">Сброс данных</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Удаляет все посты, историю публикаций и журнал парсинга. Дубли после сброса
+                  снова могут быть собраны из RSS.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="w-full border-destructive/40 text-destructive hover:bg-destructive hover:text-white"
+                onClick={handleResetAll}
+                disabled={resetting}
+              >
+                {resetting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                СБРОСИТЬ ВСЕ
+              </Button>
+            </div>
+
+            {settings.auto_publish && (
+              <>
+                <div className="space-y-2">
+                  <Label>Интервал автопубликации (мин)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={settings.auto_publish_interval_minutes}
+                    onChange={(e) =>
+                      update("auto_publish_interval_minutes", Math.max(1, parseInt(e.target.value) || 1))
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Базовый интервал между публикациями
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Разброс задержки (сек)</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">От</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={3600}
+                        value={settings.auto_publish_jitter_seconds_min}
+                        onChange={(e) =>
+                          update(
+                            "auto_publish_jitter_seconds_min",
+                            Math.max(0, parseInt(e.target.value) || 0)
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs text-muted-foreground">До</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={3600}
+                        value={settings.auto_publish_jitter_seconds_max}
+                        onChange={(e) =>
+                          update(
+                            "auto_publish_jitter_seconds_max",
+                            Math.max(0, parseInt(e.target.value) || 0)
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Случайная задержка: от {settings.auto_publish_interval_minutes} мин{" "}
+                    {Math.min(
+                      settings.auto_publish_jitter_seconds_min,
+                      settings.auto_publish_jitter_seconds_max
+                    )}{" "}
+                    с до {settings.auto_publish_interval_minutes} мин{" "}
+                    {Math.max(
+                      settings.auto_publish_jitter_seconds_min,
+                      settings.auto_publish_jitter_seconds_max
+                    )}{" "}
+                    с
+                  </p>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

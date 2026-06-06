@@ -1,4 +1,9 @@
-use crate::models::{Category, DashboardStats, Post, PublishLog, Source};
+use crate::models::{
+    Category, DashboardStats, DuplicateAiAnalysis, DuplicateGroup, DuplicateRecord,
+    DuplicatesOverview, Post, PublishLog, Source,
+};
+use std::collections::{BTreeMap, HashSet};
+use crate::services::duplicate;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -78,7 +83,123 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS parsed_items (
+                normalized_url TEXT PRIMARY KEY,
+                normalized_title TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL,
+                seen_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS duplicate_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                duplicate_url TEXT NOT NULL,
+                duplicate_title TEXT NOT NULL DEFAULT '',
+                kept_post_id INTEGER,
+                kept_title TEXT,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             "#,
+        )?;
+
+        let _ = conn.execute("ALTER TABLE posts ADD COLUMN normalized_title TEXT", []);
+        let _ = conn.execute("ALTER TABLE posts ADD COLUMN normalized_url TEXT", []);
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_normalized_title ON posts(normalized_title)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_normalized_url ON posts(normalized_url)",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE duplicate_records ADD COLUMN duplicate_description TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE duplicate_records ADD COLUMN ai_is_duplicate INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE duplicate_records ADD COLUMN ai_confidence INTEGER",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE duplicate_records ADD COLUMN ai_explanation TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE duplicate_records ADD COLUMN ai_checked_at TEXT",
+            [],
+        );
+
+        let mut stmt = conn.prepare(
+            "SELECT id, source_url, raw_title FROM posts WHERE normalized_title IS NULL OR normalized_title = ''",
+        )?;
+        let rows: Vec<(i64, String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .filter_map(Result::ok)
+            .collect();
+
+        for (id, url, title) in rows {
+            let norm_title = duplicate::normalize_title(&title);
+            let norm_url = duplicate::normalize_url(&url);
+            conn.execute(
+                "UPDATE posts SET normalized_title = ?1, normalized_url = ?2 WHERE id = ?3",
+                params![norm_title, norm_url, id],
+            )?;
+        }
+
+        conn.execute(
+            "INSERT OR IGNORE INTO parsed_items (normalized_url, normalized_title, source_url, seen_at)
+             SELECT normalized_url, normalized_title, source_url, created_at
+             FROM posts
+             WHERE normalized_url IS NOT NULL AND normalized_url != ''",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn is_parsed(&self, source_url: &str) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let norm_url = duplicate::normalize_url(source_url);
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM parsed_items WHERE normalized_url = ?1",
+            params![norm_url],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn is_url_seen(&self, source_url: &str) -> Result<bool> {
+        if self.is_parsed(source_url)? {
+            return Ok(true);
+        }
+        let conn = self.conn.lock().unwrap();
+        let norm_url = duplicate::normalize_url(source_url);
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE source_url = ?1 OR normalized_url = ?2",
+            params![source_url, norm_url],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn record_parsed_item(&self, source_url: &str, raw_title: &str) -> Result<()> {
+        self.record_parsed(source_url, raw_title)
+    }
+
+    fn record_parsed(&self, source_url: &str, raw_title: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let norm_url = duplicate::normalize_url(source_url);
+        let norm_title = duplicate::normalize_title(raw_title);
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT OR IGNORE INTO parsed_items (normalized_url, normalized_title, source_url, seen_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![norm_url, norm_title, source_url, now],
         )?;
         Ok(())
     }
@@ -239,24 +360,221 @@ impl Database {
         raw_description: &str,
         raw_image_url: Option<&str>,
         category_id: Option<i64>,
-    ) -> Result<Option<i64>> {
+    ) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
-        let exists: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM posts WHERE source_url = ?1",
-            params![source_url],
-            |r| r.get(0),
-        )?;
-        if exists > 0 {
-            return Ok(None);
-        }
-
+        let norm_url = duplicate::normalize_url(source_url);
+        let norm_title = duplicate::normalize_title(raw_title);
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO posts (source_url, raw_title, raw_description, raw_image_url, category_id, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'new', ?6)",
-            params![source_url, raw_title, raw_description, raw_image_url, category_id, now],
+            "INSERT INTO posts (source_url, raw_title, raw_description, raw_image_url, category_id, status, created_at, normalized_title, normalized_url)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'new', ?6, ?7, ?8)",
+            params![
+                source_url,
+                raw_title,
+                raw_description,
+                raw_image_url,
+                category_id,
+                now,
+                norm_title,
+                norm_url
+            ],
         )?;
-        Ok(Some(conn.last_insert_rowid()))
+        let post_id = conn.last_insert_rowid();
+        drop(conn);
+
+        self.record_parsed(source_url, raw_title)?;
+        Ok(post_id)
+    }
+
+    pub fn record_ai_duplicate(
+        &self,
+        duplicate_url: &str,
+        duplicate_title: &str,
+        duplicate_description: &str,
+        kept_post_id: Option<i64>,
+        kept_title: Option<&str>,
+        analysis: &DuplicateAiAnalysis,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO duplicate_records (
+                duplicate_url, duplicate_title, duplicate_description,
+                kept_post_id, kept_title, reason, created_at,
+                ai_is_duplicate, ai_confidence, ai_explanation, ai_checked_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'ai_duplicate', ?6, ?7, ?8, ?9, ?6)",
+            params![
+                duplicate_url,
+                duplicate_title,
+                duplicate_description,
+                kept_post_id,
+                kept_title,
+                now,
+                analysis.is_duplicate as i32,
+                analysis.confidence as i64,
+                analysis.explanation,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn reset_all_data(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM publish_log", [])?;
+        conn.execute("DELETE FROM posts", [])?;
+        conn.execute("DELETE FROM parsed_items", [])?;
+        conn.execute("DELETE FROM duplicate_records", [])?;
+        conn.execute("DELETE FROM app_meta WHERE key = 'last_fetch_at'", [])?;
+        conn.execute("UPDATE sources SET last_fetched_at = NULL", [])?;
+        Ok(())
+    }
+
+    pub fn get_duplicates_overview(&self) -> Result<DuplicatesOverview> {
+        let kept_posts = self.get_posts(None)?;
+        let kept_count = kept_posts.len() as i64;
+        let duplicates = self.get_duplicate_records(200)?;
+        let duplicates_count = self.count_duplicate_records()?;
+        let groups = self.build_duplicate_groups(&duplicates)?;
+        let kept_ids: HashSet<i64> = groups.iter().filter_map(|g| g.kept_post_id).collect();
+        let standalone_posts = kept_posts
+            .into_iter()
+            .filter(|p| !kept_ids.contains(&p.id))
+            .collect();
+
+        Ok(DuplicatesOverview {
+            kept_count,
+            duplicates_count,
+            groups,
+            standalone_posts,
+            ai_duplicate_check_enabled: false,
+        })
+    }
+
+    pub fn get_recent_posts(&self, limit: i64) -> Result<Vec<Post>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+                    p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
+                    p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
+                    p.published_at, p.error_message
+             FROM posts p LEFT JOIN categories c ON p.category_id = c.id
+             ORDER BY p.created_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], Self::map_post_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_duplicate_record(&self, id: i64) -> Result<DuplicateRecord> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, duplicate_url, duplicate_title, duplicate_description, kept_post_id,
+                    kept_title, reason, created_at, ai_is_duplicate, ai_confidence,
+                    ai_explanation, ai_checked_at
+             FROM duplicate_records WHERE id = ?1",
+            params![id],
+            Self::map_duplicate_row,
+        )
+        .context("Duplicate record not found")
+    }
+
+    pub fn update_duplicate_ai(&self, id: i64, analysis: &DuplicateAiAnalysis) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE duplicate_records
+             SET ai_is_duplicate = ?1, ai_confidence = ?2, ai_explanation = ?3, ai_checked_at = ?4
+             WHERE id = ?5",
+            params![
+                analysis.is_duplicate as i32,
+                analysis.confidence as i64,
+                analysis.explanation,
+                now,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn build_duplicate_groups(&self, duplicates: &[DuplicateRecord]) -> Result<Vec<DuplicateGroup>> {
+        let mut by_kept: BTreeMap<Option<i64>, Vec<DuplicateRecord>> = BTreeMap::new();
+        for duplicate in duplicates {
+            by_kept
+                .entry(duplicate.kept_post_id)
+                .or_default()
+                .push(duplicate.clone());
+        }
+
+        let mut groups = Vec::new();
+        for (kept_post_id, group_duplicates) in by_kept {
+            let kept_post = kept_post_id
+                .and_then(|id| self.get_post(id).ok());
+            groups.push(DuplicateGroup {
+                kept_post_id,
+                kept_post,
+                duplicates: group_duplicates,
+            });
+        }
+        Ok(groups)
+    }
+
+    fn get_duplicate_records(&self, limit: i64) -> Result<Vec<DuplicateRecord>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, duplicate_url, duplicate_title, duplicate_description, kept_post_id,
+                    kept_title, reason, created_at, ai_is_duplicate, ai_confidence,
+                    ai_explanation, ai_checked_at
+             FROM duplicate_records
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], Self::map_duplicate_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn map_duplicate_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DuplicateRecord> {
+        let ai_is_duplicate: Option<i64> = row.get(8)?;
+        Ok(DuplicateRecord {
+            id: row.get(0)?,
+            duplicate_url: row.get(1)?,
+            duplicate_title: row.get(2)?,
+            duplicate_description: row.get(3)?,
+            kept_post_id: row.get(4)?,
+            kept_title: row.get(5)?,
+            reason: row.get(6)?,
+            created_at: row.get(7)?,
+            ai_is_duplicate: ai_is_duplicate.map(|v| v != 0),
+            ai_confidence: row.get::<_, Option<i64>>(9)?.map(|v| v as u32),
+            ai_explanation: row.get(10)?,
+            ai_checked_at: row.get(11)?,
+        })
+    }
+
+    fn count_duplicate_records(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM duplicate_records", [], |r| r.get(0))?;
+        Ok(count)
+    }
+
+    fn map_post_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Post> {
+        Ok(Post {
+            id: row.get(0)?,
+            source_url: row.get(1)?,
+            raw_title: row.get(2)?,
+            raw_description: row.get(3)?,
+            raw_image_url: row.get(4)?,
+            ai_title: row.get(5)?,
+            ai_text: row.get(6)?,
+            ai_hashtags: row.get(7)?,
+            category_id: row.get(8)?,
+            category_name: row.get(9)?,
+            status: row.get(10)?,
+            vk_post_id: row.get(11)?,
+            telegram_message_id: row.get(12)?,
+            created_at: row.get(13)?,
+            published_at: row.get(14)?,
+            error_message: row.get(15)?,
+        })
     }
 
     pub fn get_posts(&self, status: Option<&str>) -> Result<Vec<Post>> {
@@ -369,19 +687,87 @@ impl Database {
         title: &str,
         text: &str,
         hashtags: &str,
+        auto_approve: bool,
     ) -> Result<()> {
+        let status = if auto_approve {
+            "approved"
+        } else {
+            "ai_processed"
+        };
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "UPDATE posts SET ai_title=?1, ai_text=?2, ai_hashtags=?3, status='ai_processed' WHERE id=?4",
-            params![title, text, hashtags, id],
+            "UPDATE posts SET ai_title=?1, ai_text=?2, ai_hashtags=?3, status=?4 WHERE id=?5",
+            params![title, text, hashtags, status, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn approve_post(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE posts SET status='approved' WHERE id=?1 AND status IN ('new', 'ai_processed')",
+            params![id],
         )?;
         Ok(())
     }
 
     pub fn delete_post(&self, id: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM publish_log WHERE post_id = ?1", params![id])?;
         conn.execute("DELETE FROM posts WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    pub fn delete_queue_posts(&self) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM publish_log WHERE post_id IN (
+                SELECT id FROM posts WHERE status IN ('new', 'ai_processed', 'approved', 'failed')
+            )",
+            [],
+        )?;
+        let deleted = conn.execute(
+            "DELETE FROM posts WHERE status IN ('new', 'ai_processed', 'approved', 'failed')",
+            [],
+        )?;
+        Ok(deleted as i64)
+    }
+
+    pub fn get_next_publishable_post(&self) -> Result<Option<Post>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+                    p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
+                    p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
+                    p.published_at, p.error_message
+             FROM posts p LEFT JOIN categories c ON p.category_id = c.id
+             WHERE p.status IN ('ai_processed', 'approved')
+             ORDER BY p.created_at DESC
+             LIMIT 1",
+            [],
+            |row| {
+                Ok(Post {
+                    id: row.get(0)?,
+                    source_url: row.get(1)?,
+                    raw_title: row.get(2)?,
+                    raw_description: row.get(3)?,
+                    raw_image_url: row.get(4)?,
+                    ai_title: row.get(5)?,
+                    ai_text: row.get(6)?,
+                    ai_hashtags: row.get(7)?,
+                    category_id: row.get(8)?,
+                    category_name: row.get(9)?,
+                    status: row.get(10)?,
+                    vk_post_id: row.get(11)?,
+                    telegram_message_id: row.get(12)?,
+                    created_at: row.get(13)?,
+                    published_at: row.get(14)?,
+                    error_message: row.get(15)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(Into::into)
     }
 
     pub fn get_new_posts(&self) -> Result<Vec<Post>> {
@@ -390,6 +776,43 @@ impl Database {
 
     pub fn get_published_posts(&self) -> Result<Vec<Post>> {
         self.get_posts(Some("published"))
+    }
+
+    pub fn get_recent_published_posts(&self, limit: i64) -> Result<Vec<Post>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+                    p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
+                    p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
+                    p.published_at, p.error_message
+             FROM posts p LEFT JOIN categories c ON p.category_id = c.id
+             WHERE p.status = 'published'
+             ORDER BY p.published_at DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(Post {
+                id: row.get(0)?,
+                source_url: row.get(1)?,
+                raw_title: row.get(2)?,
+                raw_description: row.get(3)?,
+                raw_image_url: row.get(4)?,
+                ai_title: row.get(5)?,
+                ai_text: row.get(6)?,
+                ai_hashtags: row.get(7)?,
+                category_id: row.get(8)?,
+                category_name: row.get(9)?,
+                status: row.get(10)?,
+                vk_post_id: row.get(11)?,
+                telegram_message_id: row.get(12)?,
+                created_at: row.get(13)?,
+                published_at: row.get(14)?,
+                error_message: row.get(15)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn add_publish_log(

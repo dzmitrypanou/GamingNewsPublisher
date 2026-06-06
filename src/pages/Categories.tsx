@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getCategories, updateCategory } from "@/lib/tauri";
+import { dialog } from "@/lib/dialog";
 import type { Category } from "@/lib/types";
 
 export function Categories() {
@@ -31,7 +32,7 @@ export function Categories() {
     try {
       await updateCategory(category);
     } catch (e) {
-      alert(String(e));
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
     } finally {
       setSaving(null);
     }

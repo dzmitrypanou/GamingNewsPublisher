@@ -1,20 +1,59 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink, Loader2, Undo2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getPublishedPosts } from "@/lib/tauri";
+import { getPublishedPosts, unpublishPost } from "@/lib/tauri";
 import type { Post } from "@/lib/types";
+import { dialog } from "@/lib/dialog";
 import { formatDate, truncate } from "@/lib/utils";
 
 export function History() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
+  const [unpublishingId, setUnpublishingId] = useState<number | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await getPublishedPosts();
+      setPosts(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    getPublishedPosts()
-      .then(setPosts)
-      .catch(console.error)
-      .finally(() => setLoading(false));
+    load();
   }, []);
+
+  const handleUnpublish = async (id: number) => {
+    if (
+      !(await dialog.confirm("Пост будет удалён из VK и Telegram.", {
+        title: "Снять с публикации?",
+        confirmText: "Удалить",
+        destructive: true,
+      }))
+    ) {
+      return;
+    }
+    setUnpublishingId(id);
+    try {
+      const result = await unpublishPost(id);
+      if (!result.vk_success || !result.telegram_success) {
+        await dialog.alert(
+          `VK: ${result.vk_message}\nTelegram: ${result.telegram_message}`,
+          { title: "Частичная ошибка", variant: "error" }
+        );
+      }
+      await load();
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
+    } finally {
+      setUnpublishingId(null);
+    }
+  };
 
   return (
     <div className="p-8">
@@ -74,14 +113,30 @@ export function History() {
                       )}
                     </div>
                   </div>
-                  <a
-                    href={post.source_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-muted-foreground hover:text-primary"
-                  >
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => handleUnpublish(post.id)}
+                      disabled={unpublishingId === post.id}
+                    >
+                      {unpublishingId === post.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Undo2 className="h-4 w-4" />
+                      )}
+                      Отменить
+                    </Button>
+                    <a
+                      href={post.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-muted-foreground hover:text-primary"
+                    >
+                      <ExternalLink className="h-4 w-4" />
+                    </a>
+                  </div>
                 </div>
               ))}
             </div>

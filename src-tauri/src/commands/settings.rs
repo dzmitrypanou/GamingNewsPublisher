@@ -1,3 +1,5 @@
+use crate::auto_publish_scheduler::AutoPublishConfig;
+use crate::scheduler::FetchConfig;
 use crate::models::{ApiTestResult, AppSettings};
 use crate::services::{deepseek, settings_store, telegram_api, vk_api};
 use crate::AppState;
@@ -14,7 +16,8 @@ pub fn save_settings(
     settings: AppSettings,
 ) -> Result<(), String> {
     settings_store::save_settings(&state.app_handle, &settings).map_err(|e| e.to_string())?;
-    state.update_scheduler_interval(settings.fetch_interval_minutes);
+    state.update_fetch_scheduler(FetchConfig::from_settings(&settings));
+    state.update_auto_publish_scheduler(AutoPublishConfig::from_settings(&settings));
     Ok(())
 }
 

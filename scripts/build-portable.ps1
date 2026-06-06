@@ -24,7 +24,10 @@ $OutDir = Join-Path $Root "GamingNewsPublisher"
 $AppDir = Join-Path $OutDir "app"
 
 if (Test-Path $OutDir) {
-    Remove-Item $OutDir -Recurse -Force
+    Get-ChildItem $OutDir -Exclude "app" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path $AppDir) {
+        Get-ChildItem $AppDir -Exclude "data" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
 
@@ -63,7 +66,8 @@ Gaming News Publisher - Portable
   *-setup.exe (если есть) - установщик с WebView2
 
 Данные приложения хранятся в:
-  %APPDATA%\com.gamingnews.publisher\
+  app\data\
+  (gaming_news.db, settings.json)
 
 При ошибке запуска смотрите launcher-error.log в этой папке.
 "@ | Set-Content (Join-Path $OutDir "README.txt") -Encoding UTF8

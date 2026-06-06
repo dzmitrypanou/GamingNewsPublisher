@@ -90,6 +90,34 @@ pub async fn publish_post(
     Ok(post_id.to_string())
 }
 
+pub async fn delete_post(
+    client: &Client,
+    settings: &AppSettings,
+    post_id: &str,
+) -> Result<()> {
+    let group_id = settings.vk_group_id.trim().trim_start_matches('-');
+    let owner_id = format!("-{}", group_id);
+
+    let resp: serde_json::Value = client
+        .post("https://api.vk.com/method/wall.delete")
+        .form(&[
+            ("owner_id", owner_id),
+            ("post_id", post_id.to_string()),
+            ("access_token", settings.vk_token.clone()),
+            ("v", "5.199".to_string()),
+        ])
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    if let Some(err) = resp.get("error") {
+        anyhow::bail!("{}", err["error_msg"].as_str().unwrap_or("VK wall.delete error"));
+    }
+
+    Ok(())
+}
+
 async fn upload_photo(
     client: &Client,
     settings: &AppSettings,

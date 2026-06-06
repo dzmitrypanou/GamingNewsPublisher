@@ -64,6 +64,33 @@ pub async fn publish_post(
     publish_message(client, settings, chat_id, &truncated).await
 }
 
+pub async fn delete_message(
+    client: &Client,
+    settings: &AppSettings,
+    message_id: &str,
+) -> Result<()> {
+    let url = format!(
+        "https://api.telegram.org/bot{}/deleteMessage",
+        settings.telegram_bot_token
+    );
+
+    let body = json!({
+        "chat_id": settings.telegram_channel_id,
+        "message_id": message_id.parse::<i64>().context("Invalid message_id")?,
+    });
+
+    let resp: serde_json::Value = client.post(&url).json(&body).send().await?.json().await?;
+
+    if !resp["ok"].as_bool().unwrap_or(false) {
+        anyhow::bail!(
+            "{}",
+            resp["description"].as_str().unwrap_or("deleteMessage error")
+        );
+    }
+
+    Ok(())
+}
+
 async fn publish_with_photo(
     client: &Client,
     settings: &AppSettings,

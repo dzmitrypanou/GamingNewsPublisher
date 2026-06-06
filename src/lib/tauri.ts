@@ -3,12 +3,15 @@ import type {
   ApiTestResult,
   AppSettings,
   Category,
+  AutomationStatus,
   DashboardStats,
   FetchResult,
   Post,
   PresetSource,
   PublishLog,
   PublishResult,
+  DuplicatesOverview,
+  UnpublishResult,
   RssPreviewItem,
   Source,
 } from "./types";
@@ -93,12 +96,28 @@ export async function fetchNews(): Promise<FetchResult> {
   return invoke("fetch_news");
 }
 
+export async function getAutomationStatus(): Promise<AutomationStatus> {
+  return invoke("get_automation_status");
+}
+
 export async function processPostWithAi(id: number): Promise<Post> {
   return invoke("process_post_with_ai", { id });
 }
 
 export async function publishPost(id: number): Promise<PublishResult> {
   return invoke("publish_post", { id });
+}
+
+export async function unpublishPost(id: number): Promise<UnpublishResult> {
+  return invoke("unpublish_post", { id });
+}
+
+export async function deleteQueuePosts(): Promise<number> {
+  return invoke("delete_queue_posts");
+}
+
+export async function resetAllData(): Promise<void> {
+  return invoke("reset_all_data");
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
@@ -111,4 +130,12 @@ export async function getPublishHistory(): Promise<PublishLog[]> {
 
 export async function getPublishedPosts(): Promise<Post[]> {
   return invoke("get_published_posts");
+}
+
+export async function getRecentPublishedPosts(limit = 5): Promise<Post[]> {
+  return invoke("get_recent_published_posts", { limit });
+}
+
+export async function getDuplicatesOverview(): Promise<DuplicatesOverview> {
+  return invoke("get_duplicates_overview");
 }

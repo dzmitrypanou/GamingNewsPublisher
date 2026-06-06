@@ -6,6 +6,7 @@ import {
   Tags,
   Settings,
   History,
+  Copy,
   Gamepad2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ const navItems = [
   { to: "/sources", icon: Rss, label: "Источники" },
   { to: "/categories", icon: Tags, label: "Категории" },
   { to: "/history", icon: History, label: "История" },
+  { to: "/duplicates", icon: Copy, label: "Дубли" },
   { to: "/settings", icon: Settings, label: "Настройки" },
 ];
 
@@ -52,7 +54,7 @@ export function Sidebar() {
         ))}
       </nav>
       <div className="border-t border-border p-4">
-        <p className="text-xs text-muted-foreground">VK + Telegram</p>
+        <p className="text-xs text-muted-foreground">Gaming News Publisher</p>
         <p className="text-xs text-muted-foreground">v0.1.0</p>
       </div>
     </aside>

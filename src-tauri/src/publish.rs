@@ -1,5 +1,5 @@
-use crate::models::PublishResult;
-use crate::services::{settings_store, telegram_api, vk_api};
+use crate::models::{PublishResult, UnpublishResult};
+use crate::services::{deepseek, settings_store, telegram_api, vk_api};
 use crate::AppState;
 use anyhow::Result;
 use chrono::Utc;
@@ -12,6 +12,38 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         .ai_title
         .as_deref()
         .unwrap_or(&post.raw_title);
+
+    if settings.ai_duplicate_check && !settings.deepseek_api_key.is_empty() {
+        let published: Vec<_> = state
+            .db
+            .get_posts(Some("published"))?
+            .into_iter()
+            .filter(|p| p.id != id)
+            .collect();
+
+        let description = post
+            .ai_text
+            .as_deref()
+            .unwrap_or(&post.raw_description);
+
+        if let Ok(Some(dup)) = deepseek::find_ai_duplicate_among_posts(
+            &state.http_client,
+            &settings,
+            title,
+            description,
+            &published,
+        )
+        .await
+        {
+            anyhow::bail!(
+                "Дубликат (AI): уже опубликован пост «{}» (id {}). {}",
+                dup.kept_title,
+                dup.kept_post_id,
+                dup.analysis.explanation
+            );
+        }
+    }
+
     let text = post
         .ai_text
         .as_deref()
@@ -85,5 +117,78 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         vk_message: vk_message_result,
         telegram_success: tg_success,
         telegram_message: tg_message_result,
+    })
+}
+
+pub async fn do_unpublish(state: &AppState, id: i64) -> Result<UnpublishResult> {
+    let mut post = state.db.get_post(id)?;
+    let settings = settings_store::load_settings(&state.app_handle)?;
+
+    let has_vk = post.vk_post_id.is_some();
+    let has_tg = post.telegram_message_id.is_some();
+
+    if !has_vk && !has_tg {
+        anyhow::bail!("Пост не опубликован в VK или Telegram");
+    }
+
+    let mut vk_success = !has_vk;
+    let mut vk_message = if has_vk {
+        String::new()
+    } else {
+        "Не публиковался в VK".to_string()
+    };
+    let mut tg_success = !has_tg;
+    let mut tg_message = if has_tg {
+        String::new()
+    } else {
+        "Не публиковался в Telegram".to_string()
+    };
+
+    if let Some(vk_post_id) = post.vk_post_id.as_deref() {
+        match vk_api::delete_post(&state.http_client, &settings, vk_post_id).await {
+            Ok(()) => {
+                vk_success = true;
+                vk_message = format!("Удалено: post #{}", vk_post_id);
+                let _ = state.db.add_publish_log(id, "vk", true, &vk_message);
+            }
+            Err(e) => {
+                vk_message = e.to_string();
+                let _ = state.db.add_publish_log(id, "vk", false, &vk_message);
+            }
+        }
+    }
+
+    if let Some(tg_msg_id) = post.telegram_message_id.as_deref() {
+        match telegram_api::delete_message(&state.http_client, &settings, tg_msg_id).await {
+            Ok(()) => {
+                tg_success = true;
+                tg_message = format!("Удалено: message #{}", tg_msg_id);
+                let _ = state.db.add_publish_log(id, "telegram", true, &tg_message);
+            }
+            Err(e) => {
+                tg_message = e.to_string();
+                let _ = state.db.add_publish_log(id, "telegram", false, &tg_message);
+            }
+        }
+    }
+
+    if vk_success && tg_success {
+        post.vk_post_id = None;
+        post.telegram_message_id = None;
+        post.published_at = None;
+        post.error_message = None;
+        post.status = if post.ai_title.is_some() {
+            "approved".to_string()
+        } else {
+            "new".to_string()
+        };
+        state.db.update_post(&post)?;
+    }
+
+    Ok(UnpublishResult {
+        vk_success,
+        vk_message,
+        telegram_success: tg_success,
+        telegram_message: tg_message,
     })
 }

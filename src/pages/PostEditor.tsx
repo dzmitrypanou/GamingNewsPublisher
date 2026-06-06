@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Sparkles, Send } from "lucide-react";
+import { ArrowLeft, Loader2, Sparkles, Send, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,8 +8,9 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PostPreview } from "@/components/posts/PostPreview";
 import { StatusBadge } from "@/components/posts/StatusBadge";
-import { getPost, updatePost, processPostWithAi, publishPost } from "@/lib/tauri";
-import type { Post, PublishResult } from "@/lib/types";
+import { getPost, updatePost, processPostWithAi, publishPost, unpublishPost } from "@/lib/tauri";
+import { dialog } from "@/lib/dialog";
+import type { Post, PublishResult, UnpublishResult } from "@/lib/types";
 
 export function PostEditor() {
   const { id } = useParams<{ id: string }>();
@@ -18,7 +19,9 @@ export function PostEditor() {
   const [loading, setLoading] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [unpublishing, setUnpublishing] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
+  const [unpublishResult, setUnpublishResult] = useState<UnpublishResult | null>(null);
 
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
@@ -60,9 +63,42 @@ export function PostEditor() {
       setText(updated.ai_text || updated.raw_description);
       setHashtags(updated.ai_hashtags || "");
     } catch (e) {
-      alert(String(e));
+      await dialog.alert(String(e), { title: "Ошибка AI", variant: "error" });
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  const canUnpublish =
+    post?.status === "published" ||
+    (post?.status === "failed" && !!(post.vk_post_id || post.telegram_message_id));
+
+  const handleUnpublish = async () => {
+    if (!post) return;
+    if (
+      !(await dialog.confirm(
+        "Пост будет удалён из VK и Telegram и вернётся в очередь.",
+        {
+          title: "Снять с публикации?",
+          confirmText: "Удалить",
+          destructive: true,
+        }
+      ))
+    ) {
+      return;
+    }
+    setUnpublishing(true);
+    setUnpublishResult(null);
+    try {
+      const result = await unpublishPost(post.id);
+      setUnpublishResult(result);
+      const refreshed = await getPost(post.id);
+      setPost(refreshed);
+      setPublishResult(null);
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
+    } finally {
+      setUnpublishing(false);
     }
   };
 
@@ -77,7 +113,7 @@ export function PostEditor() {
       const refreshed = await getPost(post.id);
       setPost(refreshed);
     } catch (e) {
-      alert(String(e));
+      await dialog.alert(String(e), { title: "Ошибка публикации", variant: "error" });
     } finally {
       setPublishing(false);
     }
@@ -150,7 +186,7 @@ export function PostEditor() {
                 </div>
               )}
 
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button variant="outline" onClick={handleAi} disabled={aiLoading}>
                   {aiLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -162,7 +198,7 @@ export function PostEditor() {
                 <Button variant="outline" onClick={handleSave}>
                   Сохранить
                 </Button>
-                <Button onClick={handlePublish} disabled={publishing}>
+                <Button onClick={handlePublish} disabled={publishing || post.status === "published"}>
                   {publishing ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
@@ -170,7 +206,33 @@ export function PostEditor() {
                   )}
                   Опубликовать
                 </Button>
+                {canUnpublish && (
+                  <Button
+                    variant="outline"
+                    className="text-destructive hover:text-destructive"
+                    onClick={handleUnpublish}
+                    disabled={unpublishing}
+                  >
+                    {unpublishing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Undo2 className="h-4 w-4" />
+                    )}
+                    Отменить публикацию
+                  </Button>
+                )}
               </div>
+
+              {unpublishResult && (
+                <div className="space-y-1 text-sm">
+                  <p className={unpublishResult.vk_success ? "text-success" : "text-destructive"}>
+                    VK: {unpublishResult.vk_message}
+                  </p>
+                  <p className={unpublishResult.telegram_success ? "text-success" : "text-destructive"}>
+                    Telegram: {unpublishResult.telegram_message}
+                  </p>
+                </div>
+              )}
 
               {publishResult && (
                 <div className="space-y-1 text-sm">

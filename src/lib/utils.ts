@@ -24,3 +24,10 @@ export function truncate(str: string, max: number): string {
   if (str.length <= max) return str;
   return str.slice(0, max - 1) + "…";
 }
+
+export function formatDuration(totalSeconds: number): string {
+  const safe = Math.max(0, totalSeconds);
+  const minutes = Math.floor(safe / 60);
+  const seconds = safe % 60;
+  return `${minutes} мин ${seconds.toString().padStart(2, "0")} сек`;
+}
