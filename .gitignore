@@ -26,3 +26,10 @@ dist-ssr
 # Build output
 GamingNewsPublisher/
 launcher/target/
+src-tauri/target/
+
+# Local debug / test artifacts
+llama-*.log
+llama-*-err*.txt
+*.gguf
+test-ign.jpg
