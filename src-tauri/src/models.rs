@@ -141,7 +141,7 @@ impl AppSettings {
         } else {
             self.local_dedup_model_id.clone()
         };
-        crate::services::local_model_catalog::normalize_model_id(&id).to_string()
+        crate::services::llm_dir::resolve_dedup_model_id(&id)
     }
 
     pub fn duplicate_uses_embeddings(&self) -> bool {

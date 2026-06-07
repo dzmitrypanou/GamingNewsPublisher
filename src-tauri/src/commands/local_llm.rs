@@ -166,8 +166,12 @@ pub async fn set_local_dedup_model(
         settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
     let def = crate::services::local_model_catalog::find(&model_id)
         .ok_or_else(|| "Unknown model".to_string())?;
-    if !def.model_kind.uses_embeddings() {
-        return Err("Для проверки дублей выберите энкодер или NLI-модель".into());
+    if !crate::services::llm_dir::dedup_model_selectable(&model_id) {
+        let reason = def
+            .deprecated_reason
+            .clone()
+            .unwrap_or_else(|| "Модель не подходит для проверки дублей".into());
+        return Err(reason);
     }
     if !crate::services::llm_dir::model_installed(&model_id) {
         return Err("Model not installed".into());

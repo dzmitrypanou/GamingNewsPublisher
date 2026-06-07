@@ -12,6 +12,7 @@ import {
   Send,
   History,
   Copy,
+  Square,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PostImage } from "@/components/posts/PostImage";
 import { PostPreview } from "@/components/posts/PostPreview";
 import { StatusBadge } from "@/components/posts/StatusBadge";
-import { getDashboardStats, fetchNews, getAutomationStatus, getRecentPublishedPosts } from "@/lib/tauri";
+import { getDashboardStats, fetchNews, cancelFetchNews, getAutomationStatus, getRecentPublishedPosts } from "@/lib/tauri";
 import type { AutomationStatus, DashboardStats, FetchResult, Post, PostStatus } from "@/lib/types";
 import { formatDate, formatDuration, truncate } from "@/lib/utils";
 
@@ -76,6 +77,7 @@ export function Dashboard() {
   const [automation, setAutomation] = useState<AutomationStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
+  const [stoppingFetch, setStoppingFetch] = useState(false);
   const [fetchResult, setFetchResult] = useState<FetchResult | null>(null);
   const [recentPublished, setRecentPublished] = useState<Post[]>([]);
 
@@ -126,6 +128,20 @@ export function Dashboard() {
     }
   };
 
+  const handleStopFetch = async () => {
+    setStoppingFetch(true);
+    try {
+      await cancelFetchNews();
+      await loadStats();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setStoppingFetch(false);
+    }
+  };
+
+  const fetchRunning = fetching || (automation?.fetch_running ?? false);
+
   const secondsUntilPublish = useCountdown(
     automation?.auto_publish_enabled ? automation.next_publish_at : null
   );
@@ -133,14 +149,14 @@ export function Dashboard() {
   const fetchActive = (stats?.sources_active ?? 0) > 0;
   const fetchStatusLabel = !automation?.auto_fetch_enabled
     ? "Выкл"
-    : automation?.fetch_running
+    : fetchRunning
       ? "Сбор выполняется"
       : fetchActive
         ? "Работает"
         : "Нет активных источников";
   const fetchStatusTone = !automation?.auto_fetch_enabled
     ? "bg-muted text-muted-foreground border-border"
-    : automation?.fetch_running
+    : fetchRunning
       ? "bg-warning/15 text-warning border-warning/30"
       : fetchActive
         ? "bg-success/15 text-success border-success/30"
@@ -214,14 +230,31 @@ export function Dashboard() {
           <h1 className="text-2xl font-bold">Дашборд</h1>
           <p className="text-muted-foreground">Обзор публикаций и сбор новостей</p>
         </div>
-        <Button onClick={handleFetch} disabled={fetching}>
-          {fetching ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+        <div className="flex items-center gap-2">
+          {fetchRunning ? (
+            <Button
+              variant="destructive"
+              onClick={() => void handleStopFetch()}
+              disabled={stoppingFetch}
+            >
+              {stoppingFetch ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Square className="h-4 w-4 fill-current" />
+              )}
+              Остановить сбор
+            </Button>
           ) : (
-            <RefreshCw className="h-4 w-4" />
+            <Button onClick={() => void handleFetch()} disabled={fetching}>
+              {fetching ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              Собрать новости
+            </Button>
           )}
-          Собрать новости
-        </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -297,7 +330,7 @@ export function Dashboard() {
                       className={`h-2 w-2 rounded-full ${
                         !automation?.auto_fetch_enabled
                           ? "bg-muted-foreground"
-                          : automation?.fetch_running
+                          : fetchRunning
                             ? "animate-pulse bg-warning"
                             : fetchActive
                               ? "bg-success"
@@ -335,8 +368,8 @@ export function Dashboard() {
                         : "в прошлый раз"
                     }
                   />
-                  {(automation?.fetch_running && automation.ai_duplicate_check_enabled) ||
-                  (!automation?.fetch_running &&
+                  {(fetchRunning && automation?.ai_duplicate_check_enabled) ||
+                  (!fetchRunning &&
                     automation?.ai_duplicate_check_enabled &&
                     (automation?.fetch_dedup_total ?? 0) > 0) ? (
                     <MetricTile
@@ -344,7 +377,7 @@ export function Dashboard() {
                       label="Проверка дублей"
                       value={`${automation?.fetch_dedup_checked ?? 0} / ${automation?.fetch_dedup_total ?? 0}`}
                       hint={
-                        automation?.fetch_running
+                        fetchRunning
                           ? "идёт сбор RSS"
                           : "последний сбор"
                       }
@@ -451,7 +484,7 @@ export function Dashboard() {
                   </p>
                 )}
 
-                {automation && automation.last_fetch_errors.length > 0 && !automation.fetch_running && (
+                {automation && automation.last_fetch_errors.length > 0 && !fetchRunning && (
                   <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive">
                     {automation.last_fetch_errors.slice(0, 3).map((err, i) => (
                       <p key={i} className="truncate">

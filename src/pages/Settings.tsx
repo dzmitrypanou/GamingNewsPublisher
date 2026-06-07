@@ -193,7 +193,9 @@ export function Settings() {
   const dedupModels = useMemo(
     () =>
       (localLlm?.models ?? []).filter(
-        (m) => m.model_kind === "encoder" || m.model_kind === "nli"
+        (m) =>
+          m.model_kind === "encoder" &&
+          !m.deprecated_reason
       ),
     [localLlm?.models]
   );
@@ -430,7 +432,8 @@ export function Settings() {
       model.installed &&
       !isActive &&
       !model.downloading &&
-      (role === "llm" ? model.model_kind === "llm" : model.model_kind !== "llm");
+      !model.deprecated_reason &&
+      (role === "llm" ? model.model_kind === "llm" : model.model_kind === "encoder");
 
     return (
       <div

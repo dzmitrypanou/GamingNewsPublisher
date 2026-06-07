@@ -191,6 +191,7 @@ pub fn run() {
             commands::update_post,
             commands::delete_post,
             commands::fetch_news,
+            commands::cancel_fetch_news,
             commands::get_automation_status,
             commands::process_post_with_ai,
             commands::publish_post,

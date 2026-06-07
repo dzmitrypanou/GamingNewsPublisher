@@ -27,7 +27,7 @@ impl ModelKind {
     }
 
     pub fn uses_embeddings(&self) -> bool {
-        matches!(self, ModelKind::Encoder | ModelKind::Nli)
+        matches!(self, ModelKind::Encoder)
     }
 }
 
@@ -110,7 +110,9 @@ fn encoder_catalog() -> &'static [BuiltinModelDefinition] {
             min_vram_gb: 6,
             layer_count_hint: 28,
             recommended: false,
-            deprecated_reason: None,
+            deprecated_reason: Some(
+                "Не поддерживается llama-server: неизвестный pre-tokenizer stella_en_1.5B_v5",
+            ),
             model_kind: ModelKind::Encoder,
         },
         BuiltinModelDefinition {
@@ -152,7 +154,9 @@ fn encoder_catalog() -> &'static [BuiltinModelDefinition] {
             min_vram_gb: 4,
             layer_count_hint: 12,
             recommended: false,
-            deprecated_reason: None,
+            deprecated_reason: Some(
+                "NLI-классификатор несовместим с embed-server (нужен энкодер)",
+            ),
             model_kind: ModelKind::Nli,
         },
     ]

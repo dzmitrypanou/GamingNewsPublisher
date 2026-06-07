@@ -12,6 +12,11 @@ pub async fn fetch_news(state: State<'_, Arc<AppState>>) -> Result<FetchResult, 
 }
 
 #[tauri::command]
+pub fn cancel_fetch_news(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    Ok(state.fetch_runtime.request_cancel())
+}
+
+#[tauri::command]
 pub fn get_automation_status(
     state: State<'_, Arc<AppState>>,
 ) -> Result<AutomationStatus, String> {

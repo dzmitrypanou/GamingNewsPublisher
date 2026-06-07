@@ -121,6 +121,9 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
 
     let mut source_tasks = JoinSet::new();
     for source in enabled_sources {
+        if state.fetch_runtime.is_cancel_requested() {
+            break;
+        }
         let state = state.clone();
         let counters = counters.clone();
         let settings = settings.clone();
@@ -130,10 +133,18 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
         let item_sem = item_sem.clone();
 
         source_tasks.spawn(async move {
+            if state.fetch_runtime.is_cancel_requested() {
+                return;
+            }
+
             let _source_permit = match source_sem.acquire_owned().await {
                 Ok(p) => p,
                 Err(_) => return,
             };
+
+            if state.fetch_runtime.is_cancel_requested() {
+                return;
+            }
 
             let fetch_result = crate::services::rss_fetcher::fetch_rss_items(
                 &state.http_client(),
@@ -156,6 +167,9 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
 
             let mut item_tasks = JoinSet::new();
             for item in items {
+                if state.fetch_runtime.is_cancel_requested() {
+                    break;
+                }
                 let state = state.clone();
                 let counters = counters.clone();
                 let settings = settings.clone();
@@ -185,7 +199,17 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
                 });
             }
 
-            while item_tasks.join_next().await.is_some() {}
+            while item_tasks.join_next().await.is_some() {
+                if state.fetch_runtime.is_cancel_requested() {
+                    item_tasks.abort_all();
+                    while item_tasks.join_next().await.is_some() {}
+                    break;
+                }
+            }
+
+            if state.fetch_runtime.is_cancel_requested() {
+                return;
+            }
 
             let mut updated_source = source;
             updated_source.last_fetched_at = Some(chrono::Utc::now().to_rfc3339());
@@ -195,7 +219,13 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
         });
     }
 
-    while source_tasks.join_next().await.is_some() {}
+    while source_tasks.join_next().await.is_some() {
+        if state.fetch_runtime.is_cancel_requested() {
+            source_tasks.abort_all();
+            while source_tasks.join_next().await.is_some() {}
+            break;
+        }
+    }
 
     state.db.set_last_fetch_at()?;
 
@@ -217,6 +247,10 @@ async fn process_item(
     app_data_dir: &std::path::Path,
     image_options: image_processor::PostImageOptions,
 ) {
+    if state.fetch_runtime.is_cancel_requested() {
+        return;
+    }
+
     if state.db.is_url_seen(&item.link).unwrap_or(false) {
         counters.skipped_seen.fetch_add(1, Ordering::Relaxed);
         return;

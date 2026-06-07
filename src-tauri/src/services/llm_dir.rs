@@ -27,6 +27,26 @@ pub fn is_valid_model_size(model_id: &str, size: u64) -> bool {
     size >= min && size <= max
 }
 
+pub fn dedup_model_selectable(model_id: &str) -> bool {
+    let id = local_model_catalog::normalize_model_id(model_id);
+    local_model_catalog::find(id).is_some_and(|def| {
+        def.model_kind == local_model_catalog::ModelKind::Encoder && def.deprecated_reason.is_none()
+    })
+}
+
+pub fn resolve_dedup_model_id(model_id: &str) -> String {
+    let id = local_model_catalog::normalize_model_id(model_id);
+    if dedup_model_selectable(id) && model_installed(id) {
+        return id.to_string();
+    }
+    for fallback in ["bge-m3", "rubert-tiny2", "multilingual-e5-large-instruct"] {
+        if dedup_model_selectable(fallback) && model_installed(fallback) {
+            return fallback.to_string();
+        }
+    }
+    id.to_string()
+}
+
 
 
 pub fn llm_root() -> Result<PathBuf> {

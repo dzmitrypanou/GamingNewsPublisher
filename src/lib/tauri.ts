@@ -187,6 +187,10 @@ export async function fetchNews(): Promise<FetchResult> {
   return invoke("fetch_news");
 }
 
+export async function cancelFetchNews(): Promise<boolean> {
+  return invoke("cancel_fetch_news");
+}
+
 export async function getAutomationStatus(): Promise<AutomationStatus> {
   return invoke("get_automation_status");
 }
