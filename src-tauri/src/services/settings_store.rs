@@ -6,16 +6,17 @@ use tauri_plugin_store::StoreExt;
 
 fn resolve_active_model_id(model_id: &str) -> String {
     let id = local_model_catalog::normalize_model_id(model_id);
-    if llm_dir::model_installed(id) {
+    if local_model_catalog::llm_model_selectable(id) && llm_dir::model_installed(id) {
         return id.to_string();
     }
-    if llm_dir::model_installed("deepseek-r1-7b") {
-        return "deepseek-r1-7b".into();
+    let default = local_model_catalog::default_model_id();
+    if llm_dir::model_installed(default) {
+        return default.to_string();
     }
     llm_dir::installed_model_ids()
         .into_iter()
-        .next()
-        .unwrap_or_else(|| id.to_string())
+        .find(|installed| local_model_catalog::llm_model_selectable(installed))
+        .unwrap_or_else(|| default.to_string())
 }
 
 pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
@@ -260,14 +261,50 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or(0),
+        web_context_enabled: store
+            .get("web_context_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        web_search_provider: store
+            .get("web_search_provider")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "article_only".to_string()),
+        tavily_api_key: store
+            .get("tavily_api_key")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        ai_duplicate_window_days: store
+            .get("ai_duplicate_window_days")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(30),
+        ai_duplicate_check_limit: store
+            .get("ai_duplicate_check_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(200)
+            .clamp(10, 1000),
+        ai_duplicate_llm_top_k: store
+            .get("ai_duplicate_llm_top_k")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(20)
+            .clamp(1, 100),
     };
     let loaded_id = settings.local_model_id.clone();
     let resolved_id = resolve_active_model_id(&loaded_id);
+    let mut settings = settings;
+    let mut needs_save = false;
     if resolved_id != loaded_id {
-        let mut settings = settings;
         settings.local_model_id = resolved_id;
+        needs_save = true;
+    }
+    if settings.local_dedup_model_id != settings.local_model_id {
+        settings.local_dedup_model_id = settings.local_model_id.clone();
+        needs_save = true;
+    }
+    if needs_save {
         save_settings(app, &settings)?;
-        return Ok(settings);
     }
     Ok(settings)
 }
@@ -402,6 +439,27 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     store.set(
         "watermark_height_px",
         serde_json::json!(settings.watermark_height_px),
+    );
+    store.set(
+        "web_context_enabled",
+        serde_json::json!(settings.web_context_enabled),
+    );
+    store.set(
+        "web_search_provider",
+        serde_json::json!(settings.web_search_provider),
+    );
+    store.set("tavily_api_key", serde_json::json!(settings.tavily_api_key));
+    store.set(
+        "ai_duplicate_window_days",
+        serde_json::json!(settings.ai_duplicate_window_days),
+    );
+    store.set(
+        "ai_duplicate_check_limit",
+        serde_json::json!(settings.ai_duplicate_check_limit.clamp(10, 1000)),
+    );
+    store.set(
+        "ai_duplicate_llm_top_k",
+        serde_json::json!(settings.ai_duplicate_llm_top_k.clamp(1, 100)),
     );
     store.save()?;
     Ok(())

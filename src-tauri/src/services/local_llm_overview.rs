@@ -17,12 +17,12 @@ pub fn build_overview(app: &AppHandle, runtime: &LocalLlmRuntime) -> LocalModels
 pub fn build_overview_with_embed(
     app: &AppHandle,
     runtime: &LocalLlmRuntime,
-    embed_runtime: Option<&crate::local_embed_runtime::LocalEmbedRuntime>,
+    _embed_runtime: Option<&crate::local_embed_runtime::LocalEmbedRuntime>,
     embed_error: Option<String>,
 ) -> LocalModelsOverview {
     let settings = settings_store::load_settings(app).unwrap_or_default();
     let active_id = settings.normalized_local_model_id();
-    let active_dedup_id = settings.normalized_local_dedup_model_id();
+    let active_dedup_id = active_id.clone();
     let downloads = runtime.downloads.lock().unwrap();
     let server_snapshot = downloads.server_snapshot();
     let server_downloading = server_snapshot.is_some();
@@ -80,7 +80,7 @@ pub fn build_overview_with_embed(
                 download_error,
                 is_custom: def.is_custom,
                 model_kind: def.model_kind.as_str().to_string(),
-                is_active_dedup: def.id == active_dedup_id,
+                is_active_dedup: settings.duplicate_uses_local() && def.id == active_id,
             }
         })
         .collect();
@@ -94,12 +94,13 @@ pub fn build_overview_with_embed(
 
     let files_ready = llm_dir::files_ready(&active_id);
     let ready = runtime.is_ready(&settings);
-    let dedup_files_ready = llm_dir::model_installed(&active_dedup_id) && llm_dir::server_installed();
-    let dedup_ready = embed_runtime
-        .map(|e| e.is_ready(&active_dedup_id))
-        .unwrap_or(false);
+    let dedup_ready = if settings.duplicate_uses_local() {
+        files_ready && ready
+    } else {
+        true
+    };
 
-    let runtime_error = if files_ready && !ready {
+    let runtime_error = if files_ready && !ready && settings.local_llm_needed() {
         runtime.last_start_error()
     } else if llm_dir::model_file_invalid(&active_id) {
         Some("Файл модели повреждён или неполный. Удалите и скачайте заново.".into())
@@ -107,12 +108,10 @@ pub fn build_overview_with_embed(
         None
     };
 
-    let dedup_runtime_error = if settings.local_embed_needed() && dedup_files_ready && !dedup_ready {
-        embed_runtime
-            .and_then(|e| e.last_start_error())
-            .or(embed_error)
-    } else if llm_dir::model_file_invalid(&active_dedup_id) {
-        Some("Файл модели дедупа повреждён — удалите и скачайте заново.".into())
+    let dedup_runtime_error = if settings.duplicate_uses_local() && files_ready && !dedup_ready {
+        runtime.last_start_error().or(embed_error)
+    } else if settings.duplicate_uses_local() && llm_dir::model_file_invalid(&active_id) {
+        Some("Файл модели повреждён — удалите и скачайте заново.".into())
     } else {
         None
     };

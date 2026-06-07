@@ -50,6 +50,12 @@ pub struct AppSettings {
     pub watermark_size_mode: String,
     pub watermark_width_px: u32,
     pub watermark_height_px: u32,
+    pub web_context_enabled: bool,
+    pub web_search_provider: String,
+    pub tavily_api_key: String,
+    pub ai_duplicate_window_days: u32,
+    pub ai_duplicate_check_limit: u32,
+    pub ai_duplicate_llm_top_k: u32,
 }
 
 impl Default for AppSettings {
@@ -61,9 +67,9 @@ impl Default for AppSettings {
             telegram_channel_id: String::new(),
             deepseek_api_key: String::new(),
             deepseek_model: "deepseek-chat".to_string(),
-            ai_provider: "cloud".to_string(),
-            ai_generation_provider: "cloud".to_string(),
-            ai_duplicate_provider: "cloud".to_string(),
+            ai_provider: "local".to_string(),
+            ai_generation_provider: "local".to_string(),
+            ai_duplicate_provider: "local".to_string(),
             local_model_id: local_model_catalog_id(),
             local_dedup_model_id: local_dedup_model_catalog_id(),
             local_llm_device: "gpu".to_string(),
@@ -82,7 +88,7 @@ impl Default for AppSettings {
             auto_publish_jitter_seconds_max: 60,
             auto_ai_process: true,
             auto_approve: true,
-            ai_duplicate_check: false,
+            ai_duplicate_check: true,
             post_language: "ru".to_string(),
             proxy_enabled: false,
             proxy_type: "http".to_string(),
@@ -102,6 +108,12 @@ impl Default for AppSettings {
             watermark_size_mode: "scale".to_string(),
             watermark_width_px: 0,
             watermark_height_px: 0,
+            web_context_enabled: true,
+            web_search_provider: "article_only".to_string(),
+            tavily_api_key: String::new(),
+            ai_duplicate_window_days: 30,
+            ai_duplicate_check_limit: 200,
+            ai_duplicate_llm_top_k: 50,
         }
     }
 }
@@ -128,7 +140,7 @@ impl AppSettings {
     }
 
     pub fn local_llm_needed(&self) -> bool {
-        self.local_generation_needed() || self.local_embed_needed()
+        self.local_generation_needed() || self.duplicate_uses_local()
     }
 
     pub fn normalized_local_model_id(&self) -> String {
@@ -136,22 +148,15 @@ impl AppSettings {
     }
 
     pub fn normalized_local_dedup_model_id(&self) -> String {
-        let id = if self.local_dedup_model_id.trim().is_empty() {
-            crate::services::local_model_catalog::default_dedup_model_id().to_string()
-        } else {
-            self.local_dedup_model_id.clone()
-        };
-        crate::services::llm_dir::resolve_dedup_model_id(&id)
+        self.normalized_local_model_id()
     }
 
     pub fn duplicate_uses_embeddings(&self) -> bool {
-        crate::services::local_model_catalog::find(&self.normalized_local_dedup_model_id())
-            .map(|m| m.model_kind.uses_embeddings())
-            .unwrap_or(true)
+        false
     }
 
     pub fn local_embed_needed(&self) -> bool {
-        self.duplicate_uses_local() && self.duplicate_uses_embeddings()
+        false
     }
 
     pub fn local_generation_needed(&self) -> bool {
@@ -174,9 +179,9 @@ impl AppSettings {
 
     pub fn effective_duplicate_model(&self) -> String {
         if self.duplicate_uses_local() {
-            crate::services::local_model_catalog::find(&self.normalized_local_dedup_model_id())
+            crate::services::local_model_catalog::find(&self.normalized_local_model_id())
                 .map(|m| m.name.to_string())
-                .unwrap_or_else(|| self.normalized_local_dedup_model_id())
+                .unwrap_or_else(|| self.normalized_local_model_id())
         } else {
             self.deepseek_model.clone()
         }
@@ -199,6 +204,8 @@ fn local_dedup_model_catalog_id() -> String {
 }
 
 pub const DEFAULT_PROMPT: &str = r##"Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
+Если исходный текст на другом языке — переведи. Если уже на {language} — перепиши живым языком для соцсетей.
+Не выдумывай факты: опирайся только на {title}, {description} и дополнительный контекст ниже.
 Все поля ответа строго на {language}.
 Формат ответа JSON:
 {
@@ -206,7 +213,8 @@ pub const DEFAULT_PROMPT: &str = r##"Переведи игровую новос�
   "text": "2-4 предложения в 1-2 абзаца, между абзацами пустая строка (\\n\\n), без ссылок (до 500 символов)",
   "hashtags": ["#игры", "#название_игры"]
 }
-Исходные данные: {title}, {description}, категория: {category}"##;
+Исходные данные: {title}, {description}, категория: {category}
+{web_context}"##;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Category {

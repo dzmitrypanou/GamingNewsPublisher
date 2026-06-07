@@ -1,14 +1,15 @@
 use crate::models::{FetchResult, Source};
 use crate::services::rss_fetcher::RssItem;
-use crate::services::{ai, data_dir, deepseek, image_processor, settings_store};
+use crate::services::{ai, data_dir, dedup_pipeline, image_processor, settings_store};
 use crate::AppState;
 use anyhow::Result;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use tokio::time::{Duration, timeout};
 
-const AI_DUPLICATE_CHECK_LIMIT: i64 = 50;
+const CANCEL_POLL_MS: u64 = 200;
 
 pub(crate) struct FetchCounters {
     scanned_items: AtomicI64,
@@ -112,6 +113,12 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
     let counters = Arc::new(FetchCounters::new());
     state.fetch_runtime.set_active_counters(counters.clone());
 
+    if ai_duplicate_enabled && settings.duplicate_uses_local() {
+        if let Err(e) = state.local_llm.ensure_running(&settings).await {
+            counters.push_error(format!("LLM для дублей: {e}"));
+        }
+    }
+
     let source_sem = Arc::new(Semaphore::new(
         settings.fetch_sources_concurrency.clamp(1, 20) as usize,
     ));
@@ -199,13 +206,10 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
                 });
             }
 
-            while item_tasks.join_next().await.is_some() {
-                if state.fetch_runtime.is_cancel_requested() {
-                    item_tasks.abort_all();
-                    while item_tasks.join_next().await.is_some() {}
-                    break;
-                }
-            }
+            join_set_until_done_or_cancel(&mut item_tasks, || {
+                state.fetch_runtime.is_cancel_requested()
+            })
+            .await;
 
             if state.fetch_runtime.is_cancel_requested() {
                 return;
@@ -219,13 +223,10 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
         });
     }
 
-    while source_tasks.join_next().await.is_some() {
-        if state.fetch_runtime.is_cancel_requested() {
-            source_tasks.abort_all();
-            while source_tasks.join_next().await.is_some() {}
-            break;
-        }
-    }
+    join_set_until_done_or_cancel(&mut source_tasks, || {
+        state.fetch_runtime.is_cancel_requested()
+    })
+    .await;
 
     state.db.set_last_fetch_at()?;
 
@@ -234,6 +235,29 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
     }
 
     Ok(counters.snapshot())
+}
+
+async fn join_set_until_done_or_cancel<T: Send + 'static>(
+    tasks: &mut JoinSet<T>,
+    is_cancelled: impl Fn() -> bool,
+) {
+    loop {
+        if is_cancelled() {
+            tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
+            return;
+        }
+        match timeout(
+            Duration::from_millis(CANCEL_POLL_MS),
+            tasks.join_next(),
+        )
+        .await
+        {
+            Ok(Some(_)) => continue,
+            Ok(None) => return,
+            Err(_) => continue,
+        }
+    }
 }
 
 async fn process_item(
@@ -258,51 +282,53 @@ async fn process_item(
 
     if ai_duplicate_enabled {
         counters.dedup_eligible.fetch_add(1, Ordering::Relaxed);
-        let dedup_concurrency = settings.ai_dedup_concurrency.clamp(1, 10) as usize;
-        match state.db.get_recent_posts(AI_DUPLICATE_CHECK_LIMIT) {
-            Ok(recent_posts) => {
-                match deepseek::find_ai_duplicate_among_posts(
-                    &state.http_client(),
-                    settings,
-                    state.local_llm.clone(),
-                    state.local_embed.clone(),
+        if state.fetch_runtime.is_cancel_requested() {
+            return;
+        }
+        match dedup_pipeline::check_duplicate(
+            &state,
+            settings,
+            &item.title,
+            &item.description,
+            dedup_pipeline::DedupCheckOptions {
+                exclude_post_id: None,
+                status_filter: None,
+                should_cancel: Some(Arc::new({
+                    let state = state.clone();
+                    move || state.fetch_runtime.is_cancel_requested()
+                })),
+            },
+        )
+        .await
+        {
+            Ok(Some(dup)) => {
+                let _ = state.db.record_ai_duplicate(
+                    &item.link,
                     &item.title,
                     &item.description,
-                    &recent_posts,
-                    dedup_concurrency,
-                )
-                .await
-                {
-                    Ok(Some(dup)) => {
-                        let _ = state.db.record_ai_duplicate(
-                            &item.link,
-                            &item.title,
-                            &item.description,
-                            Some(dup.kept_post_id),
-                            Some(&dup.kept_title),
-                            &dup.analysis,
-                        );
-                        let _ = state.db.record_parsed_item(&item.link, &item.title);
-                        counters
-                            .skipped_duplicates
-                            .fetch_add(1, Ordering::Relaxed);
-                        counters.dedup_checked.fetch_add(1, Ordering::Relaxed);
-                        return;
-                    }
-                    Ok(None) => {
-                        counters.dedup_checked.fetch_add(1, Ordering::Relaxed);
-                    }
-                    Err(e) => {
-                        counters.dedup_checked.fetch_add(1, Ordering::Relaxed);
-                        counters.push_error(format!("AI дубль '{}': {}", item.title, e));
-                    }
-                }
+                    Some(dup.kept_post_id),
+                    Some(&dup.kept_title),
+                    &dup.analysis,
+                );
+                let _ = state.db.record_parsed_item(&item.link, &item.title);
+                counters
+                    .skipped_duplicates
+                    .fetch_add(1, Ordering::Relaxed);
+                counters.dedup_checked.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            Ok(None) => {
+                counters.dedup_checked.fetch_add(1, Ordering::Relaxed);
             }
             Err(e) => {
                 counters.dedup_checked.fetch_add(1, Ordering::Relaxed);
-                counters.push_error(format!("DB: {}", e));
+                counters.push_error(format!("AI дубль '{}': {}", item.title, e));
             }
         }
+    }
+
+    if state.fetch_runtime.is_cancel_requested() {
+        return;
     }
 
     let image_url = image_processor::resolve_post_image(

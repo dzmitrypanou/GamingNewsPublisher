@@ -109,8 +109,12 @@ impl Database {
             "CREATE INDEX IF NOT EXISTS idx_posts_normalized_title ON posts(normalized_title)",
             [],
         );
-        let _ = conn.execute(
+        let _ =         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_posts_normalized_url ON posts(normalized_url)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC)",
             [],
         );
         let _ = conn.execute(
@@ -530,6 +534,14 @@ impl Database {
     }
 
     pub fn get_recent_posts(&self, limit: i64) -> Result<Vec<Post>> {
+        self.get_dedup_candidates(None, None, limit, None)
+    }
+
+    pub fn find_posts_by_normalized_title(&self, raw_title: &str) -> Result<Vec<Post>> {
+        let norm_title = duplicate::normalize_title(raw_title);
+        if norm_title.is_empty() {
+            return Ok(Vec::new());
+        }
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
@@ -537,10 +549,64 @@ impl Database {
                     p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
                     p.published_at, p.error_message
              FROM posts p LEFT JOIN categories c ON p.category_id = c.id
-             ORDER BY p.created_at DESC
-             LIMIT ?1",
+             WHERE p.normalized_title = ?1
+             ORDER BY p.created_at DESC",
         )?;
-        let rows = stmt.query_map(params![limit], Self::map_post_row)?;
+        let rows = stmt.query_map(params![norm_title], Self::map_post_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_dedup_candidates(
+        &self,
+        window_days: Option<u32>,
+        status_filter: Option<&str>,
+        limit: i64,
+        exclude_post_id: Option<i64>,
+    ) -> Result<Vec<Post>> {
+        let since = window_days.and_then(|days| {
+            if days == 0 {
+                None
+            } else {
+                Some(
+                    (Utc::now() - chrono::Duration::days(days as i64))
+                        .to_rfc3339(),
+                )
+            }
+        });
+
+        let conn = self.conn.lock().unwrap();
+        let sql = if status_filter.is_some() {
+            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+                    p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
+                    p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
+                    p.published_at, p.error_message
+             FROM posts p LEFT JOIN categories c ON p.category_id = c.id
+             WHERE (?1 IS NULL OR p.created_at >= ?1)
+               AND (?2 IS NULL OR p.id != ?2)
+               AND p.status = ?3
+             ORDER BY p.created_at DESC
+             LIMIT ?4"
+        } else {
+            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+                    p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
+                    p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
+                    p.published_at, p.error_message
+             FROM posts p LEFT JOIN categories c ON p.category_id = c.id
+             WHERE (?1 IS NULL OR p.created_at >= ?1)
+               AND (?2 IS NULL OR p.id != ?2)
+             ORDER BY p.created_at DESC
+             LIMIT ?3"
+        };
+
+        let mut stmt = conn.prepare(sql)?;
+        let rows = if let Some(status) = status_filter {
+            stmt.query_map(
+                params![since, exclude_post_id, status, limit],
+                Self::map_post_row,
+            )?
+        } else {
+            stmt.query_map(params![since, exclude_post_id, limit], Self::map_post_row)?
+        };
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 

@@ -150,6 +150,7 @@ async fn process_one_post(state: &AppState, post_id: i64, settings: &AppSettings
         &post.raw_title,
         &post.raw_description,
         category_name,
+        &post.source_url,
     )
     .await
     {

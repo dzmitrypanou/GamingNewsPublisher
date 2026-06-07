@@ -46,6 +46,12 @@ export interface AppSettings {
   watermark_size_mode: WatermarkSizeMode;
   watermark_width_px: number;
   watermark_height_px: number;
+  web_context_enabled: boolean;
+  web_search_provider: "off" | "article_only" | "tavily";
+  tavily_api_key: string;
+  ai_duplicate_window_days: number;
+  ai_duplicate_check_limit: number;
+  ai_duplicate_llm_top_k: number;
 }
 
 export type WatermarkSizeMode = "scale" | "custom";

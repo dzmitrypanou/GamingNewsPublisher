@@ -83,125 +83,32 @@ impl BuiltinModelDefinition {
     }
 }
 
-fn encoder_catalog() -> &'static [BuiltinModelDefinition] {
-    &[
-        BuiltinModelDefinition {
-            id: "rubert-tiny2",
-            name: "RuBERT Tiny2",
-            description: "cointegrated/rubert-tiny2 · компактный русский энкодер (~110 МБ)",
-            filename: "rubert-mini-uncased-q8_0.gguf",
-            download_url: "https://huggingface.co/sergeyzh/rubert-mini-uncased-GGUF/resolve/main/rubert-mini-uncased-q8_0.gguf",
-            size_hint_bytes: 41_940_448,
-            expected_sha256: None,
-            min_vram_gb: 2,
-            layer_count_hint: 12,
-            recommended: true,
-            deprecated_reason: None,
-            model_kind: ModelKind::Encoder,
-        },
-        BuiltinModelDefinition {
-            id: "stella-en-ru-v1",
-            name: "Stella EN-RU v1",
-            description: "dunzhang/stella_en_ru_v1 · энкодер EN/RU для семантического поиска",
-            filename: "stella_en_1.5B_v5.gguf",
-            download_url: "https://huggingface.co/abhishekbhakat/stella_en_1.5B_v5_GGUF/resolve/main/stella_en_1.5B_v5.gguf",
-            size_hint_bytes: 3_092_769_024,
-            expected_sha256: None,
-            min_vram_gb: 6,
-            layer_count_hint: 28,
-            recommended: false,
-            deprecated_reason: Some(
-                "Не поддерживается llama-server: неизвестный pre-tokenizer stella_en_1.5B_v5",
-            ),
-            model_kind: ModelKind::Encoder,
-        },
-        BuiltinModelDefinition {
-            id: "bge-m3",
-            name: "BGE-M3",
-            description: "BAAI/bge-m3 · мультиязычный энкодер, dense+sparse (~2.1 ГБ FP16, Q4 ~440 МБ)",
-            filename: "bge-m3-q4_k_m.gguf",
-            download_url: "https://huggingface.co/bbvch-ai/bge-m3-GGUF/resolve/main/bge-m3-q4_k_m.gguf",
-            size_hint_bytes: 437_778_496,
-            expected_sha256: None,
-            min_vram_gb: 4,
-            layer_count_hint: 24,
-            recommended: true,
-            deprecated_reason: None,
-            model_kind: ModelKind::Encoder,
-        },
-        BuiltinModelDefinition {
-            id: "multilingual-e5-large-instruct",
-            name: "E5 Large Instruct",
-            description: "intfloat/multilingual-e5-large-instruct · мультиязычный энкодер (~2.2 ГБ FP16, Q6 ~470 МБ)",
-            filename: "multilingual-e5-large-instruct-q6_k.gguf",
-            download_url: "https://huggingface.co/Ralriki/multilingual-e5-large-instruct-GGUF/resolve/main/multilingual-e5-large-instruct-q6_k.gguf",
-            size_hint_bytes: 467_958_912,
-            expected_sha256: None,
-            min_vram_gb: 4,
-            layer_count_hint: 24,
-            recommended: false,
-            deprecated_reason: None,
-            model_kind: ModelKind::Encoder,
-        },
-        BuiltinModelDefinition {
-            id: "symanto-sn-xlm-roberta-nli",
-            name: "XLM-RoBERTa NLI",
-            description: "symanto/sn-xlm-roberta-base-snli-mnli-anli-xnli · NLI-классификатор (~1.1 ГБ FP16, F16 ~540 МБ)",
-            filename: "XLM-Roberta.f16.gguf",
-            download_url: "https://huggingface.co/mradermacher/XLM-Roberta-GGUF/resolve/main/XLM-Roberta.f16.gguf",
-            size_hint_bytes: 563_953_248,
-            expected_sha256: None,
-            min_vram_gb: 4,
-            layer_count_hint: 12,
-            recommended: false,
-            deprecated_reason: Some(
-                "NLI-классификатор несовместим с embed-server (нужен энкодер)",
-            ),
-            model_kind: ModelKind::Nli,
-        },
-    ]
-}
-
 fn llm_catalog() -> &'static [BuiltinModelDefinition] {
     &[
         BuiltinModelDefinition {
-            id: "qwen2.5-7b-instruct",
-            name: "Qwen2.5 7B Instruct",
-            description: "Qwen/Qwen2.5-7B-Instruct · лучший выбор: русский, JSON, переписывание постов",
-            filename: "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-            download_url: "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-            size_hint_bytes: 4_683_074_240,
-            expected_sha256: None,
-            min_vram_gb: 6,
-            layer_count_hint: 28,
-            recommended: true,
-            deprecated_reason: None,
-            model_kind: ModelKind::Llm,
-        },
-        BuiltinModelDefinition {
-            id: "vikhr-7b-instruct",
-            name: "Vikhr 7B Instruct",
-            description: "Русскоязычная instruct-модель для новостей",
-            filename: "Vikhr-7B-instruct-Q4_K_M.gguf",
-            download_url: "https://huggingface.co/oblivious/Vikhr-7B-instruct-GGUF/resolve/main/Vikhr-7B-instruct-Q4_K_M.gguf",
-            size_hint_bytes: 4_413_985_472,
-            expected_sha256: None,
-            min_vram_gb: 6,
-            layer_count_hint: 28,
-            recommended: true,
-            deprecated_reason: None,
-            model_kind: ModelKind::Llm,
-        },
-        BuiltinModelDefinition {
             id: "vikhr-nemo-12b-instruct",
             name: "Vikhr-Nemo 12B Instruct",
-            description: "Vikhrmodels/Vikhr-Nemo-12B-Instruct · сильная русская LLM (~8 ГБ Q4)",
+            description: "Vikhrmodels/Vikhr-Nemo-12B-Instruct · русская LLM для генерации и проверки дублей (~7 ГБ Q4, 12+ ГБ VRAM или гибрид)",
             filename: "Vikhr-Nemo-12B-Instruct-R-21-09-24-Q4_K_M.gguf",
             download_url: "https://huggingface.co/bartowski/Vikhr-Nemo-12B-Instruct-R-21-09-24-GGUF/resolve/main/Vikhr-Nemo-12B-Instruct-R-21-09-24-Q4_K_M.gguf",
             size_hint_bytes: 7_477_218_976,
             expected_sha256: None,
             min_vram_gb: 10,
             layer_count_hint: 40,
+            recommended: true,
+            deprecated_reason: None,
+            model_kind: ModelKind::Llm,
+        },
+        BuiltinModelDefinition {
+            id: "qwen2.5-14b-instruct",
+            name: "Qwen2.5 14B Instruct",
+            description: "Qwen/Qwen2.5-14B-Instruct · сильнее для перевода EN→RU и JSON (~9 ГБ Q4, 12+ ГБ VRAM или гибрид ~24 слоя на 8 ГБ)",
+            filename: "Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+            download_url: "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+            size_hint_bytes: 9_148_278_443,
+            expected_sha256: None,
+            min_vram_gb: 12,
+            layer_count_hint: 48,
             recommended: false,
             deprecated_reason: None,
             model_kind: ModelKind::Llm,
@@ -209,7 +116,7 @@ fn llm_catalog() -> &'static [BuiltinModelDefinition] {
         BuiltinModelDefinition {
             id: "llama-3.1-8b-instruct",
             name: "Llama 3.1 8B Instruct",
-            description: "meta-llama/Llama-3.1-8B-Instruct · сильное следование промпту (~5.5 ГБ Q4)",
+            description: "meta-llama/Llama-3.1-8B-Instruct",
             filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
             download_url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
             size_hint_bytes: 4_920_739_232,
@@ -219,13 +126,13 @@ fn llm_catalog() -> &'static [BuiltinModelDefinition] {
             min_vram_gb: 8,
             layer_count_hint: 32,
             recommended: false,
-            deprecated_reason: None,
+            deprecated_reason: Some("Снята с рекомендаций: слабее для русских новостей"),
             model_kind: ModelKind::Llm,
         },
         BuiltinModelDefinition {
             id: "mistral-7b-v0.3",
             name: "Mistral 7B Instruct v0.3",
-            description: "Быстрая и лёгкая instruct-модель",
+            description: "Mistral 7B Instruct v0.3",
             filename: "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
             download_url: "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
             size_hint_bytes: 4_372_812_000,
@@ -233,13 +140,13 @@ fn llm_catalog() -> &'static [BuiltinModelDefinition] {
             min_vram_gb: 6,
             layer_count_hint: 32,
             recommended: false,
-            deprecated_reason: None,
+            deprecated_reason: Some("Снята с рекомендаций: слабее для русских новостей"),
             model_kind: ModelKind::Llm,
         },
         BuiltinModelDefinition {
             id: "deepseek-r1-7b",
             name: "DeepSeek R1 7B",
-            description: "Reasoning-модель; хуже для JSON и коротких постов",
+            description: "Reasoning-модель",
             filename: "deepseek-r1-7b-q4_k_m.gguf",
             download_url: "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
             size_hint_bytes: 4_683_073_504,
@@ -254,9 +161,7 @@ fn llm_catalog() -> &'static [BuiltinModelDefinition] {
 }
 
 fn builtin_catalog() -> impl Iterator<Item = &'static BuiltinModelDefinition> {
-    encoder_catalog()
-        .iter()
-        .chain(llm_catalog().iter())
+    llm_catalog().iter()
 }
 
 pub fn all_models() -> Vec<ModelDefinition> {
@@ -302,12 +207,19 @@ pub fn normalize_model_id(id: &str) -> &str {
     }
 }
 
+pub fn llm_model_selectable(id: &str) -> bool {
+    let id = normalize_model_id(id);
+    find(id).is_some_and(|def| {
+        def.model_kind == ModelKind::Llm && def.deprecated_reason.is_none()
+    })
+}
+
 pub fn default_model_id() -> &'static str {
-    "qwen2.5-7b-instruct"
+    "vikhr-nemo-12b-instruct"
 }
 
 pub fn default_dedup_model_id() -> &'static str {
-    "bge-m3"
+    default_model_id()
 }
 
 pub fn resolve_ngl(device: &str, gpu_layers: u32) -> u32 {

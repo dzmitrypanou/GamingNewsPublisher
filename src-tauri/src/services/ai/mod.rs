@@ -25,16 +25,10 @@ fn is_configured_for(
     task: AiTask,
     settings: &AppSettings,
     local_llm: &LocalLlmRuntime,
-    local_embed: &LocalEmbedRuntime,
+    _local_embed: &LocalEmbedRuntime,
 ) -> bool {
     match provider_for(task, settings) {
-        "local" => {
-            if task == AiTask::Duplicate && settings.duplicate_uses_embeddings() {
-                local_embed.is_files_ready(&settings.normalized_local_dedup_model_id())
-            } else {
-                local_llm.is_files_ready(settings)
-            }
-        }
+        "local" => local_llm.is_files_ready(settings),
         "cloud" => !settings.deepseek_api_key.is_empty(),
         _ => false,
     }
@@ -44,16 +38,10 @@ fn is_available_for(
     task: AiTask,
     settings: &AppSettings,
     local_llm: &LocalLlmRuntime,
-    local_embed: &LocalEmbedRuntime,
+    _local_embed: &LocalEmbedRuntime,
 ) -> bool {
     match provider_for(task, settings) {
-        "local" => {
-            if task == AiTask::Duplicate && settings.duplicate_uses_embeddings() {
-                local_embed.is_ready(&settings.normalized_local_dedup_model_id())
-            } else {
-                local_llm.is_ready(settings)
-            }
-        }
+        "local" => local_llm.is_ready(settings),
         "cloud" => !settings.deepseek_api_key.is_empty(),
         _ => false,
     }

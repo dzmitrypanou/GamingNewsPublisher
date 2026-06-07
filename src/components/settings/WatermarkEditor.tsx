@@ -29,9 +29,11 @@ interface WatermarkEditorProps {
 
 export function WatermarkEditor({ settings, onChange, onPatch }: WatermarkEditorProps) {
   const previewRef = useRef<HTMLDivElement>(null);
+  const previewWrapRef = useRef<HTMLDivElement>(null);
   const [picking, setPicking] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [naturalSize, setNaturalSize] = useState({ width: 200, height: 80 });
+  const [previewContainerWidth, setPreviewContainerWidth] = useState(560);
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState<ResizeHandle | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
@@ -62,8 +64,26 @@ export function WatermarkEditor({ settings, onChange, onPatch }: WatermarkEditor
     [layoutInput]
   );
 
-  const previewScale = 560 / settings.post_image_width;
+  const previewScale =
+    Math.min(560, previewContainerWidth) / settings.post_image_width;
+  const previewDisplayWidth = settings.post_image_width * previewScale;
+  const previewDisplayHeight = settings.post_image_height * previewScale;
   const aspect = naturalSize.width / Math.max(1, naturalSize.height);
+
+  useEffect(() => {
+    const el = previewWrapRef.current;
+    if (!el) return;
+
+    const updateWidth = () => {
+      const w = el.clientWidth;
+      if (w > 0) setPreviewContainerWidth(w);
+    };
+
+    updateWidth();
+    const ro = new ResizeObserver(updateWidth);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!settings.watermark_image) {
@@ -276,7 +296,7 @@ export function WatermarkEditor({ settings, onChange, onPatch }: WatermarkEditor
       : `${settings.watermark_scale_percent}% ширины`;
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <Label>Водяной знак</Label>
@@ -521,8 +541,8 @@ export function WatermarkEditor({ settings, onChange, onPatch }: WatermarkEditor
             </div>
           )}
 
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
+          <div className="min-w-0 space-y-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <Label>Предпросмотр</Label>
               <span className="text-xs text-muted-foreground">
                 {settings.post_image_width}×{settings.post_image_height} · перетащите или тяните за
@@ -530,12 +550,14 @@ export function WatermarkEditor({ settings, onChange, onPatch }: WatermarkEditor
               </span>
               <Move className="h-3.5 w-3.5 text-muted-foreground" />
             </div>
+            <div ref={previewWrapRef} className="w-full min-w-0 max-w-full overflow-hidden">
             <div
               ref={previewRef}
-              className="relative overflow-hidden rounded-lg border border-border bg-[linear-gradient(45deg,#2a2a2a_25%,transparent_25%),linear-gradient(-45deg,#2a2a2a_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#2a2a2a_75%),linear-gradient(-45deg,transparent_75%,#2a2a2a_75%)] bg-[length:16px_16px] bg-[position:0_0,0_8px,8px_-8px,-8px_0px] bg-[#1a1a1a]"
+              className="relative max-w-full overflow-hidden rounded-lg border border-border bg-[linear-gradient(45deg,#2a2a2a_25%,transparent_25%),linear-gradient(-45deg,#2a2a2a_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#2a2a2a_75%),linear-gradient(-45deg,transparent_75%,#2a2a2a_75%)] bg-[length:16px_16px] bg-[position:0_0,0_8px,8px_-8px,-8px_0px] bg-[#1a1a1a]"
               style={{
-                width: settings.post_image_width * previewScale,
-                height: settings.post_image_height * previewScale,
+                width: previewDisplayWidth,
+                height: previewDisplayHeight,
+                maxWidth: "100%",
               }}
             >
               <div
@@ -585,6 +607,7 @@ export function WatermarkEditor({ settings, onChange, onPatch }: WatermarkEditor
               <div className="absolute bottom-1 right-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">
                 {placement.x}, {placement.y} · {placement.width}×{placement.height}
               </div>
+            </div>
             </div>
           </div>
         </>

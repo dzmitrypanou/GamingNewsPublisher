@@ -116,25 +116,12 @@ pub fn run() {
                 auto_publish_scheduler: Mutex::new(None),
             });
 
-            if settings.local_generation_needed() && local_llm.is_files_ready(&settings) {
+            if settings.local_llm_needed() && local_llm.is_files_ready(&settings) {
                 let llm = local_llm.clone();
                 let settings = settings.clone();
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = llm.start(&settings).await {
                         eprintln!("Local LLM start: {}", e);
-                    }
-                });
-            }
-
-            if settings.local_embed_needed() {
-                let embed = local_embed.clone();
-                let settings = settings.clone();
-                let dedup_id = settings.normalized_local_dedup_model_id();
-                tauri::async_runtime::spawn(async move {
-                    if embed.is_files_ready(&dedup_id) {
-                        if let Err(e) = embed.start(&settings, &dedup_id).await {
-                            eprintln!("Local embed start: {}", e);
-                        }
                     }
                 });
             }

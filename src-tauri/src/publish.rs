@@ -1,5 +1,5 @@
 use crate::models::{PublishResult, UnpublishResult};
-use crate::services::{ai, data_dir, deepseek, post_text, settings_store, telegram_api, vk_api};
+use crate::services::{ai, data_dir, dedup_pipeline, post_text, settings_store, telegram_api, vk_api};
 use crate::AppState;
 use anyhow::Result;
 use chrono::Utc;
@@ -16,27 +16,21 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
     if settings.ai_duplicate_check
         && ai::ai_is_configured_for_duplicate(&settings, &state.local_llm, &state.local_embed)
     {
-        let published: Vec<_> = state
-            .db
-            .get_posts(Some("published"))?
-            .into_iter()
-            .filter(|p| p.id != id)
-            .collect();
-
         let description = post
             .ai_text
             .as_deref()
             .unwrap_or(&post.raw_description);
 
-        if let Ok(Some(dup)) = deepseek::find_ai_duplicate_among_posts(
-            &state.http_client(),
+        if let Ok(Some(dup)) = dedup_pipeline::check_duplicate(
+            state,
             &settings,
-            state.local_llm.clone(),
-            state.local_embed.clone(),
             title,
             description,
-            &published,
-            settings.ai_dedup_concurrency.clamp(1, 10) as usize,
+            dedup_pipeline::DedupCheckOptions {
+                exclude_post_id: Some(id),
+                status_filter: Some("published".to_string()),
+                should_cancel: None,
+            },
         )
         .await
         {

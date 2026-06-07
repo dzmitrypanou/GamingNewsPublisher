@@ -367,11 +367,10 @@ pub fn delete_local_model(
 
     let active = settings.normalized_local_model_id();
     let active_dedup = settings.normalized_local_dedup_model_id();
-    let def = local_model_catalog::find(model_id).context("Unknown model")?;
-    let deleting_active = active == model_id && !def.model_kind.uses_embeddings();
-    let deleting_active_dedup = active_dedup == model_id && def.model_kind.uses_embeddings();
+    let deleting_active =
+        active == model_id || active_dedup == model_id;
 
-    if deleting_active || deleting_active_dedup {
+    if deleting_active {
         let others: Vec<_> = llm_dir::installed_model_ids()
             .into_iter()
             .filter(|id| id != model_id)
@@ -404,7 +403,7 @@ pub fn delete_local_model(
             .find(|id| {
                 id != model_id
                     && local_model_catalog::find(id)
-                        .is_some_and(|m| !m.model_kind.uses_embeddings())
+                        .is_some_and(|_| local_model_catalog::llm_model_selectable(id))
             })
             .or_else(|| {
                 llm_dir::installed_model_ids()
@@ -413,19 +412,7 @@ pub fn delete_local_model(
             })
             .context("No other installed model")?;
         let mut new_settings = settings.clone();
-        new_settings.local_model_id = next_id;
-        crate::services::settings_store::save_settings(app, &new_settings)?;
-        Some(new_settings)
-    } else if deleting_active_dedup {
-        let next_id = llm_dir::installed_model_ids()
-            .into_iter()
-            .find(|id| {
-                id != model_id
-                    && local_model_catalog::find(id)
-                        .is_some_and(|m| m.model_kind.uses_embeddings())
-            })
-            .context("No other installed dedup model")?;
-        let mut new_settings = settings.clone();
+        new_settings.local_model_id = next_id.clone();
         new_settings.local_dedup_model_id = next_id;
         crate::services::settings_store::save_settings(app, &new_settings)?;
         Some(new_settings)

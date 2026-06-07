@@ -23,7 +23,7 @@ pub fn save_settings(
     state.update_fetch_scheduler(FetchConfig::from_settings(&settings));
     state.update_auto_publish_scheduler(AutoPublishConfig::from_settings(&settings));
 
-    if settings.local_generation_needed() {
+    if settings.local_llm_needed() {
         if state.local_llm.is_files_ready(&settings) {
             let llm = state.local_llm.clone();
             let settings = settings.clone();
@@ -35,21 +35,6 @@ pub fn save_settings(
         }
     } else {
         state.local_llm.shutdown();
-    }
-
-    if settings.local_embed_needed() {
-        let dedup_id = settings.normalized_local_dedup_model_id();
-        if state.local_embed.is_files_ready(&dedup_id) {
-            let embed = state.local_embed.clone();
-            let settings = settings.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = embed.start(&settings, &dedup_id).await {
-                    eprintln!("Local embed start after settings save: {}", e);
-                }
-            });
-        }
-    } else {
-        state.local_embed.shutdown();
     }
 
     Ok(())

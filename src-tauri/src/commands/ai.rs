@@ -35,6 +35,7 @@ pub async fn process_post_with_ai(
         &post.raw_title,
         &post.raw_description,
         category_name,
+        &post.source_url,
     )
     .await
     .map_err(|e| e.to_string())?;

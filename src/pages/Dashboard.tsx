@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   RefreshCw,
@@ -80,6 +80,7 @@ export function Dashboard() {
   const [stoppingFetch, setStoppingFetch] = useState(false);
   const [fetchResult, setFetchResult] = useState<FetchResult | null>(null);
   const [recentPublished, setRecentPublished] = useState<Post[]>([]);
+  const fetchCancelledRef = useRef(false);
 
   const loadStats = async () => {
     try {
@@ -100,11 +101,24 @@ export function Dashboard() {
 
   useEffect(() => {
     loadStats();
-    const timer = setInterval(loadStats, 3000);
+    const intervalMs = stoppingFetch ? 400 : 3000;
+    const timer = setInterval(loadStats, intervalMs);
     return () => clearInterval(timer);
-  }, []);
+  }, [stoppingFetch]);
+
+  const waitForFetchStopped = async () => {
+    for (let i = 0; i < 120; i++) {
+      const status = await getAutomationStatus();
+      setAutomation(status);
+      if (!status.fetch_running) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  };
 
   const handleFetch = async () => {
+    fetchCancelledRef.current = false;
     setFetching(true);
     setFetchResult(null);
     try {
@@ -124,14 +138,19 @@ export function Dashboard() {
         errors: [String(e)],
       });
     } finally {
-      setFetching(false);
+      if (!fetchCancelledRef.current) {
+        setFetching(false);
+      }
     }
   };
 
   const handleStopFetch = async () => {
     setStoppingFetch(true);
+    fetchCancelledRef.current = true;
     try {
       await cancelFetchNews();
+      await waitForFetchStopped();
+      setFetching(false);
       await loadStats();
     } catch (e) {
       console.error(e);
@@ -140,7 +159,8 @@ export function Dashboard() {
     }
   };
 
-  const fetchRunning = fetching || (automation?.fetch_running ?? false);
+  const fetchRunning =
+    stoppingFetch || fetching || (automation?.fetch_running ?? false);
 
   const secondsUntilPublish = useCountdown(
     automation?.auto_publish_enabled ? automation.next_publish_at : null
@@ -242,7 +262,7 @@ export function Dashboard() {
               ) : (
                 <Square className="h-4 w-4 fill-current" />
               )}
-              Остановить сбор
+              {stoppingFetch ? "Останавливаем…" : "Остановить сбор"}
             </Button>
           ) : (
             <Button onClick={() => void handleFetch()} disabled={fetching}>

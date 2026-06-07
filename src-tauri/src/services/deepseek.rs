@@ -45,6 +45,7 @@ pub async fn test_connection(
         "Тест",
         "Тестовое описание новости",
         "PC",
+        "",
     )
     .await
     {
@@ -85,6 +86,10 @@ pub async fn compare_news_pair(
             description_b,
         )
         .await;
+    }
+
+    if settings.duplicate_uses_local() {
+        let _ = local_llm.ensure_running(settings).await;
     }
 
     let desc_a = truncate_for_ai(description_a);
@@ -139,6 +144,7 @@ pub async fn find_ai_duplicate_among_posts(
     description: &str,
     posts: &[Post],
     dedup_concurrency: usize,
+    should_cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 ) -> Result<Option<AiDuplicateMatch>> {
     if posts.is_empty() {
         return Ok(None);
@@ -168,9 +174,13 @@ pub async fn find_ai_duplicate_among_posts(
         let semaphore = semaphore.clone();
         let local_llm = local_llm.clone();
         let local_embed = local_embed.clone();
+        let should_cancel = should_cancel.clone();
 
         tasks.spawn(async move {
             if found.load(Ordering::Relaxed) {
+                return;
+            }
+            if should_cancel.as_ref().is_some_and(|f| f()) {
                 return;
             }
 
@@ -179,7 +189,7 @@ pub async fn find_ai_duplicate_among_posts(
                 Err(_) => return,
             };
 
-            if found.load(Ordering::Relaxed) {
+            if found.load(Ordering::Relaxed) || should_cancel.as_ref().is_some_and(|f| f()) {
                 return;
             }
 
@@ -211,10 +221,22 @@ pub async fn find_ai_duplicate_among_posts(
         });
     }
 
-    while tasks.join_next().await.is_some() {
-        if found.load(Ordering::Relaxed) {
+    let poll_cancel = should_cancel.clone();
+    loop {
+        if found.load(Ordering::Relaxed) || poll_cancel.as_ref().is_some_and(|f| f()) {
             tasks.abort_all();
+            while tasks.join_next().await.is_some() {}
             break;
+        }
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            tasks.join_next(),
+        )
+        .await
+        {
+            Ok(Some(_)) => continue,
+            Ok(None) => break,
+            Err(_) => continue,
         }
     }
 
@@ -228,8 +250,18 @@ pub async fn process_news(
     title: &str,
     description: &str,
     category: &str,
+    source_url: &str,
 ) -> Result<AiResponse> {
-    call_api(client, settings, local_llm, title, description, category).await
+    call_api(
+        client,
+        settings,
+        local_llm,
+        title,
+        description,
+        category,
+        source_url,
+    )
+    .await
 }
 
 async fn call_api(
@@ -239,19 +271,36 @@ async fn call_api(
     title: &str,
     description: &str,
     category: &str,
+    source_url: &str,
 ) -> Result<AiResponse> {
     let language = language_label(&settings.post_language).to_string();
+
+    let web_context = crate::services::web_context::build_web_context(
+        client,
+        settings,
+        source_url,
+        title,
+    )
+    .await;
+    let web_context_block = if web_context.is_empty() {
+        String::new()
+    } else {
+        format!("\nДополнительный контекст из интернета:\n{web_context}")
+    };
 
     let prompt = settings
         .ai_prompt_template
         .replace("{title}", title)
         .replace("{description}", description)
         .replace("{category}", category)
-        .replace("{language}", &language);
+        .replace("{language}", &language)
+        .replace("{web_context}", &web_context_block);
 
     let system = format!(
         "Ты помощник для перевода и написания коротких игровых новостей. \
-         Всегда переводи исходный текст на {language}, если он на другом языке. \
+         Если исходный текст на другом языке — переводи на {language}. \
+         Если уже на {language} — перепиши живым языком для соцсетей. \
+         Не выдумывай факты: опирайся только на данные из запроса. \
          Отвечай только одним валидным JSON-объектом, без markdown и пояснений. \
          Поле text — не длиннее 400 символов. Все текстовые поля — на {language}."
     );

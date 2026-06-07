@@ -11,6 +11,10 @@ const RSS_USER_AGENT: &str =
 const RSS_ACCEPT: &str =
     "application/rss+xml, application/atom+xml, application/xml, text/xml, */*";
 
+pub fn user_agent() -> &'static str {
+    RSS_USER_AGENT
+}
+
 pub fn get_preset_sources() -> Vec<PresetSource> {
     vec![
         // General Gaming News
@@ -281,11 +285,53 @@ pub async fn preview_rss(client: &Client, url: &str) -> Result<Vec<RssPreviewIte
         .collect())
 }
 
-fn clean_html(input: &str) -> String {
+pub fn clean_html(input: &str) -> String {
     let re = Regex::new(r"<[^>]+>").unwrap();
     let text = re.replace_all(input, " ");
-    let text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">");
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    strip_feed_boilerplate(&text)
+}
+
+/// RSS feeds often end descriptions with `<a href="...">Read more</a>` — tag stripping leaves the link text.
+fn strip_feed_boilerplate(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    static SUFFIXES: &[&str] = &[
+        "read more",
+        "read more.",
+        "continue reading",
+        "continue reading.",
+        "see more",
+        "see more.",
+        "full story",
+        "full story.",
+        "read the full story",
+        "read the full story.",
+        "view full article",
+        "view full article.",
+        "читать далее",
+        "читать далее.",
+        "подробнее",
+        "подробнее.",
+    ];
+
+    let lower = trimmed.to_ascii_lowercase();
+    for suffix in SUFFIXES {
+        if lower.ends_with(suffix) {
+            let cut = trimmed.len().saturating_sub(suffix.len());
+            return trimmed[..cut].trim_end().trim_end_matches('.').trim().to_string();
+        }
+    }
+
+    trimmed.to_string()
 }
 
 fn extract_image_from_entry(entry: &rss::Item) -> Option<String> {
@@ -347,4 +393,23 @@ pub async fn fetch_og_image(client: &Client, url: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_html_strips_read_more_link_text() {
+        let html = r#"It's somehow been seven years. <a href="https://example.com/article">Read more</a>"#;
+        let out = clean_html(html);
+        assert!(!out.to_ascii_lowercase().contains("read more"));
+        assert!(out.contains("seven years"));
+    }
+
+    #[test]
+    fn clean_html_preserves_normal_text() {
+        let html = "Normal description without boilerplate.";
+        assert_eq!(clean_html(html), "Normal description without boilerplate.");
+    }
 }

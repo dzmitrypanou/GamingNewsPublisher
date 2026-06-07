@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod data_dir;
+pub mod dedup_pipeline;
 pub mod deepseek;
 pub mod duplicate;
 pub mod image_loader;
@@ -15,5 +16,6 @@ pub mod proxy;
 pub mod rss_fetcher;
 pub mod settings_store;
 pub mod watermark;
+pub mod web_context;
 pub mod telegram_api;
 pub mod vk_api;

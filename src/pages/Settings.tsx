@@ -27,7 +27,6 @@ import {
   addCustomLocalModel,
   removeCustomLocalModel,
   setLocalModel,
-  setLocalDedupModel,
 } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { dialog } from "@/lib/dialog";
@@ -36,6 +35,8 @@ import { cn, countProxyLines, mergeProxyLists } from "@/lib/utils";
 import { WatermarkEditor } from "@/components/settings/WatermarkEditor";
 
 const DEFAULT_PROMPT = `Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
+Если исходный текст на другом языке — переведи. Если уже на {language} — перепиши живым языком для соцсетей.
+Не выдумывай факты: опирайся только на {title}, {description} и дополнительный контекст ниже.
 Все поля ответа строго на {language}.
 Формат ответа JSON:
 {
@@ -43,7 +44,8 @@ const DEFAULT_PROMPT = `Переведи игровую новость на {lan
   "text": "2-4 предложения в 1-2 абзаца, между абзацами пустая строка (\\n\\n), без ссылок (до 500 символов)",
   "hashtags": ["#игры", "#название_игры"]
 }
-Исходные данные: {title}, {description}, категория: {category}`;
+Исходные данные: {title}, {description}, категория: {category}
+{web_context}`;
 
 const defaultSettings: AppSettings = {
   vk_token: "",
@@ -52,11 +54,11 @@ const defaultSettings: AppSettings = {
   telegram_channel_id: "",
   deepseek_api_key: "",
   deepseek_model: "deepseek-chat",
-  ai_provider: "cloud",
-  ai_generation_provider: "cloud",
-  ai_duplicate_provider: "cloud",
-  local_model_id: "qwen2.5-7b-instruct",
-  local_dedup_model_id: "bge-m3",
+  ai_provider: "local",
+  ai_generation_provider: "local",
+  ai_duplicate_provider: "local",
+  local_model_id: "vikhr-nemo-12b-instruct",
+  local_dedup_model_id: "vikhr-nemo-12b-instruct",
   local_llm_device: "gpu",
   local_llm_gpu_layers: 28,
   ai_prompt_template: DEFAULT_PROMPT,
@@ -73,7 +75,7 @@ const defaultSettings: AppSettings = {
   auto_publish_jitter_seconds_max: 60,
   auto_ai_process: true,
   auto_approve: true,
-  ai_duplicate_check: false,
+  ai_duplicate_check: true,
   post_language: "ru",
   proxy_enabled: false,
   proxy_type: "http",
@@ -93,6 +95,12 @@ const defaultSettings: AppSettings = {
   watermark_size_mode: "scale",
   watermark_width_px: 0,
   watermark_height_px: 0,
+  web_context_enabled: true,
+  web_search_provider: "article_only",
+  tavily_api_key: "",
+  ai_duplicate_window_days: 30,
+  ai_duplicate_check_limit: 200,
+  ai_duplicate_llm_top_k: 50,
 };
 
 const PANEL_HEADER = "p-4 pb-2";
@@ -185,17 +193,10 @@ export function Settings() {
   }, []);
 
   const activeModel = localLlm?.models.find((m) => m.is_active);
-  const activeDedupModel = localLlm?.models.find((m) => m.is_active_dedup);
   const llmModels = useMemo(
-    () => (localLlm?.models ?? []).filter((m) => m.model_kind === "llm"),
-    [localLlm?.models]
-  );
-  const dedupModels = useMemo(
     () =>
       (localLlm?.models ?? []).filter(
-        (m) =>
-          m.model_kind === "encoder" &&
-          !m.deprecated_reason
+        (m) => m.model_kind === "llm" && !m.deprecated_reason
       ),
     [localLlm?.models]
   );
@@ -238,19 +239,23 @@ export function Settings() {
     if (!localLlm?.server_installed) {
       return { label: "llama-server не установлен", ok: false };
     }
-    const active = dedupModels.find((m) => m.is_active_dedup);
+    const active = llmModels.find((m) => m.is_active);
     if (!active?.installed) {
       return {
-        label: "Энкодер не установлен",
+        label: "LLM не установлена",
         ok: false,
-        detail: activeDedupModel?.name ?? settings.local_dedup_model_id,
+        detail: activeModel?.name ?? settings.local_model_id,
       };
     }
     if (localLlm.dedup_ready) {
-      return { label: "Готово", ok: true, detail: active.name };
+      return {
+        label: "Готово",
+        ok: true,
+        detail: `${active.name} · LLM-сравнение`,
+      };
     }
     return {
-      label: "Энкодер не запущен",
+      label: "LLM не запущена",
       ok: false,
       error: localLlm.dedup_runtime_error,
     };
@@ -283,15 +288,6 @@ export function Settings() {
     try {
       await setLocalModel(modelId);
       update("local_model_id", modelId);
-      await getLocalModelsOverview().then(setLocalLlm);
-    } catch (e) {
-      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
-    }
-  };
-
-  const handleSelectDedupModel = async (modelId: string) => {
-    try {
-      await setLocalDedupModel(modelId);
       update("local_dedup_model_id", modelId);
       await getLocalModelsOverview().then(setLocalLlm);
     } catch (e) {
@@ -413,9 +409,9 @@ export function Settings() {
     return "размер неизвестен";
   };
 
-  const renderModelCard = (model: LocalModelInfo, role: "llm" | "dedup") => {
-    const peers = role === "llm" ? llmModels : dedupModels;
-    const isActive = role === "llm" ? model.is_active : model.is_active_dedup;
+  const renderModelCard = (model: LocalModelInfo) => {
+    const peers = llmModels;
+    const isActive = model.is_active;
     const otherInstalled = peers.filter((m) => m.installed && m.id !== model.id);
     const canDelete =
       model.installed &&
@@ -433,7 +429,7 @@ export function Settings() {
       !isActive &&
       !model.downloading &&
       !model.deprecated_reason &&
-      (role === "llm" ? model.model_kind === "llm" : model.model_kind === "encoder");
+      model.model_kind === "llm";
 
     return (
       <div
@@ -450,9 +446,7 @@ export function Settings() {
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             {isActive && (
-              <span className="text-xs text-primary">
-                {role === "llm" ? "Активна" : "Для дублей"}
-              </span>
+              <span className="text-xs text-primary">Активна</span>
             )}
             {model.recommended && (
               <span className="text-xs text-success">Рекомендуется</span>
@@ -473,9 +467,7 @@ export function Settings() {
 
         {isActive && model.installed && !model.downloading && (
           <div className="mt-2 rounded-md border border-border bg-background/40 px-2 py-1.5">
-            {renderRuntimeStatus(
-              role === "llm" ? generationRuntimeStatus() : dedupRuntimeStatus()
-            )}
+            {renderRuntimeStatus(generationRuntimeStatus())}
           </div>
         )}
 
@@ -569,11 +561,7 @@ export function Settings() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() =>
-                void (role === "llm"
-                  ? handleSelectModel(model.id)
-                  : handleSelectDedupModel(model.id))
-              }
+              onClick={() => void handleSelectModel(model.id)}
             >
               Выбрать
             </Button>
@@ -951,7 +939,7 @@ export function Settings() {
                 {settings.ai_generation_provider === "local" &&
                   renderRuntimePanel("Генерация (LLM)", generationRuntimeStatus())}
                 {settings.ai_duplicate_provider === "local" &&
-                  renderRuntimePanel("Дубли (энкодер)", dedupRuntimeStatus())}
+                  renderRuntimePanel("Дубли (LLM)", dedupRuntimeStatus())}
               </div>
             )}
 
@@ -987,8 +975,62 @@ export function Settings() {
                 className="font-mono text-xs"
               />
               <p className="text-xs text-muted-foreground">
-                Переменные: {"{title}"}, {"{description}"}, {"{category}"}, {"{language}"}
+                Переменные: {"{title}"}, {"{description}"}, {"{category}"}, {"{language}"},{" "}
+                {"{web_context}"}
               </p>
+            </div>
+
+            <div className={PANEL_BOX}>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label className="text-sm">Контекст из интернета</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Перед генерацией подтягивается текст статьи по ссылке поста
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.web_context_enabled}
+                  onCheckedChange={(v) => update("web_context_enabled", v)}
+                />
+              </div>
+              {settings.web_context_enabled && (
+                <div className="space-y-2">
+                  <Label className="text-xs">Источник контекста</Label>
+                  <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background/50 p-0.5">
+                    {(
+                      [
+                        ["article_only", "Статья по URL"],
+                        ["tavily", "Статья + Tavily"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => update("web_search_provider", value)}
+                        className={cn(
+                          "rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
+                          settings.web_search_provider === value
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:text-foreground"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {settings.web_search_provider === "tavily" && (
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Tavily API Key</Label>
+                      <Input
+                        type="password"
+                        value={settings.tavily_api_key}
+                        onChange={(e) => update("tavily_api_key", e.target.value)}
+                        placeholder="tvly-..."
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
               <div>
@@ -997,8 +1039,8 @@ export function Settings() {
                   {settings.ai_duplicate_provider === "off"
                     ? "Выберите провайдера для проверки дублей выше."
                     : settings.ai_duplicate_provider === "local"
-                      ? `Дубли определяет локальный энкодер (до ${settings.ai_dedup_concurrency} параллельных проверок).`
-                      : "Дубли определяет облачный API."}
+                      ? `URL и заголовки — по всей базе; LLM сравнивает до ${settings.ai_duplicate_llm_top_k} кандидатов (до ${Math.min(settings.ai_dedup_concurrency, 2)} параллельно).`
+                      : "URL и заголовки — по всей базе; LLM — до top-K кандидатов через облачный API."}
                 </p>
                 {settings.ai_duplicate_provider === "cloud" && !settings.deepseek_api_key && (
                   <p className="mt-1 text-xs text-warning">Укажите API ключ DeepSeek</p>
@@ -1022,6 +1064,55 @@ export function Settings() {
                 onCheckedChange={(v) => update("ai_duplicate_check", v)}
               />
             </div>
+            {settings.ai_duplicate_check && settings.ai_duplicate_provider !== "off" && (
+              <div className={PANEL_BOX}>
+                <p className="text-xs text-muted-foreground">
+                  Сначала проверяются URL и точное совпадение заголовка по всей базе. Затем из
+                  постов за указанный период отбираются кандидаты; LLM сравнивает top-K
+                  (похожие по эвристике — всегда). Для Cloud рекомендуется top-K 50–100, окно 0 или
+                  60+ дней.
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Окно (дней)</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={365}
+                      value={settings.ai_duplicate_window_days}
+                      onChange={(e) =>
+                        update("ai_duplicate_window_days", parseInt(e.target.value) || 0)
+                      }
+                    />
+                    <p className="text-[10px] text-muted-foreground">0 = без ограничения</p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Кандидатов из БД</Label>
+                    <Input
+                      type="number"
+                      min={10}
+                      max={1000}
+                      value={settings.ai_duplicate_check_limit}
+                      onChange={(e) =>
+                        update("ai_duplicate_check_limit", parseInt(e.target.value) || 200)
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">LLM top-K</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={settings.ai_duplicate_llm_top_k}
+                      onChange={(e) =>
+                        update("ai_duplicate_llm_top_k", parseInt(e.target.value) || 50)
+                      }
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
             <TestButton
               platform="deepseek"
               testing={testing}
@@ -1465,7 +1556,7 @@ export function Settings() {
           <CardHeader className={PANEL_HEADER}>
             <CardTitle className="text-base">Локальные модели</CardTitle>
             <CardDescription className="text-xs">
-              LLM — генерация; энкодеры/NLI — дубли · app/llm/models/
+              Vikhr-Nemo 12B или Qwen2.5 14B · генерация и дубли · app/llm/models/
             </CardDescription>
           </CardHeader>
           <CardContent className={PANEL_CONTENT}>
@@ -1473,7 +1564,7 @@ export function Settings() {
               {settings.ai_generation_provider === "local" &&
                 renderRuntimePanel("Генерация (LLM)", generationRuntimeStatus())}
               {settings.ai_duplicate_provider === "local" &&
-                renderRuntimePanel("Дубли (энкодер)", dedupRuntimeStatus())}
+                renderRuntimePanel("Дубли (LLM)", dedupRuntimeStatus())}
             </div>
 
             {localLlm?.error && !localLlm.server_downloading && (
@@ -1631,37 +1722,9 @@ export function Settings() {
                             </div>
 
               {llmModels.length > 0 && (
-                <details
-                  className="rounded-lg border border-border bg-secondary/10"
-                  open={settings.ai_generation_provider === "local"}
-                >
-                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
-                    Модели для генерации (LLM) · {llmModels.length}
-                    {settings.ai_generation_provider !== "local" && (
-                      <span className="font-normal text-muted-foreground"> · провайдер «API/Выкл»</span>
-                    )}
-                  </summary>
-                  <div className="space-y-2 border-t border-border p-3">
-                    {llmModels.map((m) => renderModelCard(m, "llm"))}
-                  </div>
-                </details>
-              )}
-
-              {dedupModels.length > 0 && (
-                <details
-                  className="rounded-lg border border-border bg-secondary/10"
-                  open={settings.ai_duplicate_provider === "local"}
-                >
-                  <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
-                    Модели для проверки дублей · {dedupModels.length}
-                    {settings.ai_duplicate_provider !== "local" && (
-                      <span className="font-normal text-muted-foreground"> · провайдер «API/Выкл»</span>
-                    )}
-                  </summary>
-                  <div className="space-y-2 border-t border-border p-3">
-                    {dedupModels.map((m) => renderModelCard(m, "dedup"))}
-                  </div>
-                </details>
+                <div className="space-y-2">
+                  {llmModels.map((m) => renderModelCard(m))}
+                </div>
               )}
             </div>
           </CardContent>
