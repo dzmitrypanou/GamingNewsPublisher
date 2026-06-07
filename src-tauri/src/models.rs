@@ -9,10 +9,21 @@ pub struct AppSettings {
     pub telegram_channel_id: String,
     pub deepseek_api_key: String,
     pub deepseek_model: String,
+    pub ai_provider: String,
+    pub ai_generation_provider: String,
+    pub ai_duplicate_provider: String,
+    pub local_model_id: String,
+    pub local_dedup_model_id: String,
+    pub local_llm_device: String,
+    pub local_llm_gpu_layers: u32,
     pub ai_prompt_template: String,
     pub auto_fetch: bool,
     pub fetch_interval_minutes: u32,
     pub fetch_items_per_source: u32,
+    pub fetch_sources_concurrency: u32,
+    pub fetch_items_concurrency: u32,
+    pub ai_dedup_concurrency: u32,
+    pub ai_process_concurrency: u32,
     pub auto_publish: bool,
     pub auto_publish_interval_minutes: u32,
     pub auto_publish_jitter_seconds_min: u32,
@@ -50,10 +61,21 @@ impl Default for AppSettings {
             telegram_channel_id: String::new(),
             deepseek_api_key: String::new(),
             deepseek_model: "deepseek-chat".to_string(),
+            ai_provider: "cloud".to_string(),
+            ai_generation_provider: "cloud".to_string(),
+            ai_duplicate_provider: "cloud".to_string(),
+            local_model_id: local_model_catalog_id(),
+            local_dedup_model_id: local_dedup_model_catalog_id(),
+            local_llm_device: "gpu".to_string(),
+            local_llm_gpu_layers: 28,
             ai_prompt_template: DEFAULT_PROMPT.to_string(),
             auto_fetch: true,
             fetch_interval_minutes: 30,
             fetch_items_per_source: 10,
+            fetch_sources_concurrency: 6,
+            fetch_items_concurrency: 4,
+            ai_dedup_concurrency: 2,
+            ai_process_concurrency: 3,
             auto_publish: false,
             auto_publish_interval_minutes: 60,
             auto_publish_jitter_seconds_min: 0,
@@ -82,6 +104,98 @@ impl Default for AppSettings {
             watermark_height_px: 0,
         }
     }
+}
+
+impl AppSettings {
+    pub fn uses_local_ai(&self) -> bool {
+        self.local_llm_needed()
+    }
+
+    pub fn generation_uses_local(&self) -> bool {
+        self.ai_generation_provider == "local"
+    }
+
+    pub fn duplicate_uses_local(&self) -> bool {
+        self.ai_duplicate_provider == "local"
+    }
+
+    pub fn generation_uses_cloud(&self) -> bool {
+        self.ai_generation_provider == "cloud"
+    }
+
+    pub fn duplicate_uses_cloud(&self) -> bool {
+        self.ai_duplicate_provider == "cloud"
+    }
+
+    pub fn local_llm_needed(&self) -> bool {
+        self.local_generation_needed() || self.local_embed_needed()
+    }
+
+    pub fn normalized_local_model_id(&self) -> String {
+        crate::services::local_model_catalog::normalize_model_id(&self.local_model_id).to_string()
+    }
+
+    pub fn normalized_local_dedup_model_id(&self) -> String {
+        let id = if self.local_dedup_model_id.trim().is_empty() {
+            crate::services::local_model_catalog::default_dedup_model_id().to_string()
+        } else {
+            self.local_dedup_model_id.clone()
+        };
+        crate::services::local_model_catalog::normalize_model_id(&id).to_string()
+    }
+
+    pub fn duplicate_uses_embeddings(&self) -> bool {
+        crate::services::local_model_catalog::find(&self.normalized_local_dedup_model_id())
+            .map(|m| m.model_kind.uses_embeddings())
+            .unwrap_or(true)
+    }
+
+    pub fn local_embed_needed(&self) -> bool {
+        self.duplicate_uses_local() && self.duplicate_uses_embeddings()
+    }
+
+    pub fn local_generation_needed(&self) -> bool {
+        self.generation_uses_local()
+    }
+
+    pub fn effective_ai_model(&self) -> String {
+        self.effective_generation_model()
+    }
+
+    pub fn effective_generation_model(&self) -> String {
+        if self.generation_uses_local() {
+            crate::services::local_model_catalog::find(&self.local_model_id)
+                .map(|m| m.name.to_string())
+                .unwrap_or_else(|| self.normalized_local_model_id())
+        } else {
+            self.deepseek_model.clone()
+        }
+    }
+
+    pub fn effective_duplicate_model(&self) -> String {
+        if self.duplicate_uses_local() {
+            crate::services::local_model_catalog::find(&self.normalized_local_dedup_model_id())
+                .map(|m| m.name.to_string())
+                .unwrap_or_else(|| self.normalized_local_dedup_model_id())
+        } else {
+            self.deepseek_model.clone()
+        }
+    }
+
+    pub fn active_ngl(&self) -> u32 {
+        crate::services::local_model_catalog::resolve_ngl(
+            &self.local_llm_device,
+            self.local_llm_gpu_layers,
+        )
+    }
+}
+
+fn local_model_catalog_id() -> String {
+    crate::services::local_model_catalog::default_model_id().to_string()
+}
+
+fn local_dedup_model_catalog_id() -> String {
+    crate::services::local_model_catalog::default_dedup_model_id().to_string()
 }
 
 pub const DEFAULT_PROMPT: &str = r##"Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
@@ -161,6 +275,10 @@ pub struct AutomationStatus {
     pub fetch_interval_minutes: u32,
     pub last_fetch_at: Option<String>,
     pub last_fetch_new_posts: i64,
+    pub last_fetch_scanned_items: i64,
+    pub last_fetch_skipped_seen: i64,
+    pub last_fetch_skipped_existing: i64,
+    pub last_fetch_skipped_duplicates: i64,
     pub last_fetch_errors: Vec<String>,
     pub auto_publish_enabled: bool,
     pub auto_publish_interval_minutes: u32,
@@ -170,6 +288,14 @@ pub struct AutomationStatus {
     pub next_post: Option<QueuePostPreview>,
     pub next_publish_at: Option<String>,
     pub scheduled_delay_seconds: u64,
+    pub ai_queue_count: i64,
+    pub ai_processing_count: i64,
+    pub ai_uses_local: bool,
+    pub ai_generation_uses_local: bool,
+    pub ai_duplicate_uses_local: bool,
+    pub ai_duplicate_check_enabled: bool,
+    pub fetch_dedup_checked: i64,
+    pub fetch_dedup_total: i64,
 }
 
 impl QueuePostPreview {
@@ -199,6 +325,11 @@ pub struct DashboardStats {
     pub posts_published: i64,
     pub sources_active: i64,
     pub last_fetch_at: Option<String>,
+    pub duplicates_total: i64,
+    pub posts_waiting_ai: i64,
+    pub posts_processing_ai: i64,
+    pub posts_ai_processed: i64,
+    pub posts_approved: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,8 +381,12 @@ pub struct DuplicateAiAnalysis {
 pub struct FetchResult {
     pub scanned_items: i64,
     pub new_posts: i64,
-    pub processed_posts: i64,
+    pub ai_queued: i64,
+    pub skipped_seen: i64,
+    pub skipped_existing: i64,
     pub skipped_duplicates: i64,
+    pub dedup_checked: i64,
+    pub dedup_eligible: i64,
     pub errors: Vec<String>,
 }
 
@@ -286,6 +421,65 @@ pub struct PresetSource {
     pub url: String,
     pub category_name: String,
     pub group: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalModelInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub size_hint_bytes: u64,
+    pub min_vram_gb: u8,
+    pub layer_count_hint: u32,
+    pub recommended: bool,
+    pub deprecated_reason: Option<String>,
+    pub installed: bool,
+    pub install_invalid: bool,
+    pub file_bytes: u64,
+    pub is_active: bool,
+    pub downloading: bool,
+    pub has_partial_download: bool,
+    pub progress_pct: f64,
+    pub download_error: Option<String>,
+    pub is_custom: bool,
+    pub model_kind: String,
+    pub is_active_dedup: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalModelsOverview {
+    pub server_installed: bool,
+    pub server_downloading: bool,
+    pub server_progress_pct: f64,
+    pub server_download_error: Option<String>,
+    pub ready: bool,
+    pub dedup_ready: bool,
+    pub downloading: bool,
+    pub download_model_id: Option<String>,
+    pub progress_pct: f64,
+    pub stage: String,
+    pub error: Option<String>,
+    pub runtime_error: Option<String>,
+    pub dedup_runtime_error: Option<String>,
+    pub device: String,
+    pub gpu_layers: u32,
+    pub active_ngl: u32,
+    pub active_model_id: String,
+    pub active_dedup_model_id: String,
+    pub models: Vec<LocalModelInfo>,
+    pub disk_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalLlmStatus {
+    pub ready: bool,
+    pub downloading: bool,
+    pub progress_pct: f64,
+    pub stage: String,
+    pub error: Option<String>,
+    pub server_installed: bool,
+    pub model_installed: bool,
+    pub disk_bytes: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

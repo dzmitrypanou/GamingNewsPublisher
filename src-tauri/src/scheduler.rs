@@ -39,7 +39,7 @@ pub fn start_scheduler(state: Arc<AppState>, initial: FetchConfig) -> SchedulerH
             let state_startup = state.clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                if let Err(e) = fetch::do_fetch(&state_startup).await {
+                if let Err(e) = fetch::do_fetch(state_startup).await {
                     if !e.to_string().contains("уже выполняется") {
                         eprintln!("Startup fetch error: {}", e);
                     }
@@ -75,7 +75,7 @@ pub fn start_scheduler(state: Arc<AppState>, initial: FetchConfig) -> SchedulerH
 
                     let state_clone = state.clone();
                     tauri::async_runtime::spawn(async move {
-                        match fetch::do_fetch(&state_clone).await {
+                        match fetch::do_fetch(state_clone).await {
                             Ok(_) => {}
                             Err(e) if e.to_string().contains("уже выполняется") => {}
                             Err(e) => eprintln!("Scheduled fetch error: {}", e),

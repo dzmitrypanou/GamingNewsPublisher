@@ -11,6 +11,7 @@ import {
   Timer,
   Send,
   History,
+  Copy,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -112,8 +113,12 @@ export function Dashboard() {
       setFetchResult({
         scanned_items: 0,
         new_posts: 0,
-        processed_posts: 0,
+        ai_queued: 0,
+        skipped_seen: 0,
+        skipped_existing: 0,
         skipped_duplicates: 0,
+        dedup_checked: 0,
+        dedup_eligible: 0,
         errors: [String(e)],
       });
     } finally {
@@ -141,9 +146,63 @@ export function Dashboard() {
         ? "bg-success/15 text-success border-success/30"
         : "bg-muted text-muted-foreground border-border";
 
+  const postsAiDone =
+    (stats?.posts_ai_processed ?? 0) + (stats?.posts_approved ?? 0);
+
+  const pipelineCards = [
+    {
+      label: "Дублей найдено",
+      value: stats?.duplicates_total ?? 0,
+      icon: Copy,
+      color: "text-warning",
+      hint:
+        (automation?.last_fetch_skipped_duplicates ?? 0) > 0
+          ? `+${automation?.last_fetch_skipped_duplicates} в последнем сборе`
+          : "всего в журнале",
+      to: "/duplicates",
+    },
+    {
+      label: "Постов осталось",
+      value: stats?.posts_pending ?? 0,
+      icon: Newspaper,
+      color: "text-primary",
+      hint: "ожидают публикации",
+    },
+    {
+      label: "Ждут AI",
+      value: stats?.posts_waiting_ai ?? 0,
+      icon: Clock,
+      color: "text-[#2AABEE]",
+      hint:
+        (stats?.posts_processing_ai ?? 0) > 0
+          ? `${stats?.posts_processing_ai} сейчас обрабатываются`
+          : (automation?.ai_queue_count ?? 0) > 0
+            ? "в очереди на генерацию"
+            : "новые посты",
+    },
+    {
+      label: "Обработано AI",
+      value: postsAiDone,
+      icon: CheckCircle,
+      color: "text-success",
+      hint:
+        postsAiDone > 0
+          ? [
+              (stats?.posts_approved ?? 0) > 0
+                ? `${stats?.posts_approved} одобрено`
+                : null,
+              (stats?.posts_ai_processed ?? 0) > 0
+                ? `${stats?.posts_ai_processed} на проверке`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          : "пока нет",
+    },
+  ];
+
   const statCards = [
     { label: "Сегодня", value: stats?.posts_today ?? 0, icon: Newspaper, color: "text-primary" },
-    { label: "В очереди", value: stats?.posts_pending ?? 0, icon: Clock, color: "text-warning" },
     { label: "Опубликовано", value: stats?.posts_published ?? 0, icon: CheckCircle, color: "text-success" },
     { label: "Источников", value: stats?.sources_active ?? 0, icon: Rss, color: "text-[#2AABEE]" },
   ];
@@ -171,7 +230,35 @@ export function Dashboard() {
         </div>
       ) : (
         <>
-          <div className="mb-8 grid grid-cols-4 gap-4">
+          <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+            {pipelineCards.map(({ label, value, icon: Icon, color, hint, to }) => {
+              const content = (
+                <Card className={to ? "transition-colors hover:bg-accent/30" : undefined}>
+                  <CardContent className="flex items-center gap-4 p-5">
+                    <div className={`rounded-lg bg-secondary p-3 ${color}`}>
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-2xl font-bold tabular-nums">{value}</p>
+                      <p className="text-sm text-muted-foreground">{label}</p>
+                      {hint && (
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{hint}</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+              return to ? (
+                <Link key={label} to={to}>
+                  {content}
+                </Link>
+              ) : (
+                <div key={label}>{content}</div>
+              );
+            })}
+          </div>
+
+          <div className="mb-8 grid grid-cols-3 gap-4">
             {statCards.map(({ label, value, icon: Icon, color }) => (
               <Card key={label}>
                 <CardContent className="flex items-center gap-4 p-6">
@@ -242,7 +329,78 @@ export function Dashboard() {
                     icon={Newspaper}
                     label="Добавлено"
                     value={String(automation?.last_fetch_new_posts ?? 0)}
-                    hint="в прошлый раз"
+                    hint={
+                      (automation?.last_fetch_scanned_items ?? 0) > 0
+                        ? `из ${automation?.last_fetch_scanned_items} RSS`
+                        : "в прошлый раз"
+                    }
+                  />
+                  {(automation?.fetch_running && automation.ai_duplicate_check_enabled) ||
+                  (!automation?.fetch_running &&
+                    automation?.ai_duplicate_check_enabled &&
+                    (automation?.fetch_dedup_total ?? 0) > 0) ? (
+                    <MetricTile
+                      icon={CheckCircle}
+                      label="Проверка дублей"
+                      value={`${automation?.fetch_dedup_checked ?? 0} / ${automation?.fetch_dedup_total ?? 0}`}
+                      hint={
+                        automation?.fetch_running
+                          ? "идёт сбор RSS"
+                          : "последний сбор"
+                      }
+                    />
+                  ) : null}
+                  {(automation?.last_fetch_skipped_seen ?? 0) > 0 ||
+                  (automation?.last_fetch_skipped_existing ?? 0) > 0 ||
+                  (automation?.last_fetch_skipped_duplicates ?? 0) > 0 ? (
+                    <MetricTile
+                      icon={Copy}
+                      label="Пропущено при сборе"
+                      value={String(
+                        (automation?.last_fetch_skipped_seen ?? 0) +
+                          (automation?.last_fetch_skipped_existing ?? 0) +
+                          (automation?.last_fetch_skipped_duplicates ?? 0)
+                      )}
+                      hint={[
+                        (automation?.last_fetch_skipped_seen ?? 0) > 0
+                          ? `${automation?.last_fetch_skipped_seen} уже были`
+                          : null,
+                        (automation?.last_fetch_skipped_existing ?? 0) > 0
+                          ? `${automation?.last_fetch_skipped_existing} дубль URL`
+                          : null,
+                        (automation?.last_fetch_skipped_duplicates ?? 0) > 0
+                          ? `${automation?.last_fetch_skipped_duplicates} AI-дубль`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(", ")}
+                    />
+                  ) : null}
+                  <MetricTile
+                    icon={Clock}
+                    label="Ждут AI"
+                    value={String(stats?.posts_waiting_ai ?? 0)}
+                    hint={
+                      (stats?.posts_processing_ai ?? 0) > 0
+                        ? `${stats?.posts_processing_ai} в обработке`
+                        : "новые посты"
+                    }
+                  />
+                  <MetricTile
+                    icon={CheckCircle}
+                    label="Обработано AI"
+                    value={String(postsAiDone)}
+                    hint={`${stats?.posts_ai_processed ?? 0} на проверке · ${stats?.posts_approved ?? 0} одобрено`}
+                  />
+                  <MetricTile
+                    icon={Copy}
+                    label="Дублей всего"
+                    value={String(stats?.duplicates_total ?? 0)}
+                    hint={
+                      (automation?.last_fetch_skipped_duplicates ?? 0) > 0
+                        ? `+${automation?.last_fetch_skipped_duplicates} в последнем сборе`
+                        : "в журнале дублей"
+                    }
                   />
                   {automation?.auto_publish_enabled ? (
                     <MetricTile
@@ -259,6 +417,32 @@ export function Dashboard() {
                       hint="включите в настройках"
                     />
                   )}
+                  <MetricTile
+                    icon={Activity}
+                    label="AI в фоне"
+                    value={
+                      (automation?.ai_processing_count ?? 0) > 0
+                        ? `${automation?.ai_processing_count} активно`
+                        : String(automation?.ai_queue_count ?? 0)
+                    }
+                    hint={[
+                      automation?.ai_generation_uses_local
+                        ? "генерация: локально"
+                        : "генерация: API",
+                      automation?.ai_duplicate_check_enabled
+                        ? automation?.ai_duplicate_uses_local
+                          ? "дубли: локально"
+                          : "дубли: API"
+                        : null,
+                      (automation?.ai_processing_count ?? 0) > 0
+                        ? `в очереди: ${automation?.ai_queue_count ?? 0}`
+                        : (automation?.ai_queue_count ?? 0) > 0
+                          ? "ожидают обработки"
+                          : "очередь пуста",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  />
                 </div>
 
                 {automation?.auto_publish_enabled && (
@@ -297,20 +481,50 @@ export function Dashboard() {
                       icon={Newspaper}
                       label="Новых"
                       value={String(fetchResult.new_posts)}
-                      hint="постов"
+                      hint={
+                        fetchResult.scanned_items > 0
+                          ? `из ${fetchResult.scanned_items} RSS`
+                          : "постов"
+                      }
                     />
                     <MetricTile
-                      icon={Activity}
-                      label="AI"
-                      value={String(fetchResult.processed_posts)}
-                      hint="обработано"
+                      icon={Copy}
+                      label="Дублей"
+                      value={String(fetchResult.skipped_duplicates)}
+                      hint="пропущено при сборе"
                     />
-                    {fetchResult.skipped_duplicates > 0 && (
+                    <MetricTile
+                      icon={Clock}
+                      label="Ждут AI"
+                      value={String(fetchResult.ai_queued)}
+                      hint="отправлено в очередь"
+                    />
+                    {(fetchResult.skipped_seen > 0 ||
+                      fetchResult.skipped_existing > 0) && (
                       <MetricTile
                         icon={CheckCircle}
-                        label="Дублей"
-                        value={String(fetchResult.skipped_duplicates)}
-                        hint="пропущено"
+                        label="Пропущено"
+                        value={String(
+                          fetchResult.skipped_seen + fetchResult.skipped_existing
+                        )}
+                        hint={[
+                          fetchResult.skipped_seen > 0
+                            ? `${fetchResult.skipped_seen} уже были`
+                            : null,
+                          fetchResult.skipped_existing > 0
+                            ? `${fetchResult.skipped_existing} дубль URL`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(", ")}
+                      />
+                    )}
+                    {fetchResult.dedup_eligible > 0 && (
+                      <MetricTile
+                        icon={Activity}
+                        label="Проверка дублей"
+                        value={`${fetchResult.dedup_checked} / ${fetchResult.dedup_eligible}`}
+                        hint="AI-сравнение"
                       />
                     )}
                   </div>

@@ -1,0 +1,3 @@
+# Optional: place llama-server.exe here before portable build
+# to skip downloading the server binary on first local AI setup.
+# Model (~4.5 GB) is always downloaded on first use to app/llm/models/

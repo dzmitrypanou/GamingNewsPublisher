@@ -1,19 +1,26 @@
+mod ai_worker;
 mod auto_publish_runtime;
 mod auto_publish_scheduler;
 mod commands;
 mod db;
 mod fetch;
 mod fetch_runtime;
+mod local_embed_runtime;
+mod local_llm_runtime;
 mod models;
 mod publish;
 mod scheduler;
 mod services;
 
+use ai_worker::{start_ai_worker, AiWorkerRuntime};
 use auto_publish_runtime::AutoPublishRuntime;
 use auto_publish_scheduler::{AutoPublishConfig, AutoPublishSchedulerHandle};
 use db::Database;
 use fetch_runtime::FetchRuntime;
+use local_embed_runtime::LocalEmbedRuntime;
+use local_llm_runtime::LocalLlmRuntime;
 use scheduler::{FetchConfig, SchedulerHandle};
+use services::local_llm_download;
 use services::proxy::HttpClientPool;
 use services::settings_store;
 use std::sync::{Arc, Mutex};
@@ -25,6 +32,9 @@ pub struct AppState {
     http_pool: Mutex<HttpClientPool>,
     pub fetch_runtime: FetchRuntime,
     pub auto_publish_runtime: Arc<AutoPublishRuntime>,
+    pub ai_worker: Arc<AiWorkerRuntime>,
+    pub local_llm: Arc<LocalLlmRuntime>,
+    pub local_embed: Arc<LocalEmbedRuntime>,
     scheduler: Mutex<Option<SchedulerHandle>>,
     auto_publish_scheduler: Mutex<Option<AutoPublishSchedulerHandle>>,
 }
@@ -67,6 +77,8 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle().clone();
 
+            let _ = local_llm_download::copy_bundled_server_if_present();
+
             let data_dir = services::data_dir::resolve(&app_handle)?;
             app_handle
                 .asset_protocol_scope()
@@ -75,20 +87,21 @@ pub fn run() {
             let db_path = services::data_dir::database_path(&data_dir);
             let database = Database::new(db_path)?;
 
-            let settings = settings_store::load_settings(&app_handle)
-                .unwrap_or_default();
+            let settings = settings_store::load_settings(&app_handle).unwrap_or_default();
 
-            let http_pool = HttpClientPool::from_settings(&settings)
-                .unwrap_or_else(|e| {
-                    eprintln!("HTTP pool init: {}", e);
-                    HttpClientPool::from_settings(&models::AppSettings {
-                        proxy_enabled: false,
-                        ..Default::default()
-                    })
-                    .expect("direct http client must build")
-                });
+            let http_pool = HttpClientPool::from_settings(&settings).unwrap_or_else(|e| {
+                eprintln!("HTTP pool init: {}", e);
+                HttpClientPool::from_settings(&models::AppSettings {
+                    proxy_enabled: false,
+                    ..Default::default()
+                })
+                .expect("direct http client must build")
+            });
 
             let publish_runtime = Arc::new(AutoPublishRuntime::new());
+            let ai_worker = Arc::new(AiWorkerRuntime::new());
+            let local_llm = Arc::new(LocalLlmRuntime::new());
+            let local_embed = Arc::new(LocalEmbedRuntime::new());
 
             let state = Arc::new(AppState {
                 app_handle: app_handle.clone(),
@@ -96,9 +109,37 @@ pub fn run() {
                 http_pool: Mutex::new(http_pool),
                 fetch_runtime: FetchRuntime::new(),
                 auto_publish_runtime: publish_runtime.clone(),
+                ai_worker: ai_worker.clone(),
+                local_llm: local_llm.clone(),
+                local_embed: local_embed.clone(),
                 scheduler: Mutex::new(None),
                 auto_publish_scheduler: Mutex::new(None),
             });
+
+            if settings.local_generation_needed() && local_llm.is_files_ready(&settings) {
+                let llm = local_llm.clone();
+                let settings = settings.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = llm.start(&settings).await {
+                        eprintln!("Local LLM start: {}", e);
+                    }
+                });
+            }
+
+            if settings.local_embed_needed() {
+                let embed = local_embed.clone();
+                let settings = settings.clone();
+                let dedup_id = settings.normalized_local_dedup_model_id();
+                tauri::async_runtime::spawn(async move {
+                    if embed.is_files_ready(&dedup_id) {
+                        if let Err(e) = embed.start(&settings, &dedup_id).await {
+                            eprintln!("Local embed start: {}", e);
+                        }
+                    }
+                });
+            }
+
+            start_ai_worker(state.clone(), ai_worker);
 
             let scheduler = scheduler::start_scheduler(
                 state.clone(),
@@ -161,7 +202,46 @@ pub fn run() {
             commands::get_published_posts,
             commands::get_recent_published_posts,
             commands::get_duplicates_overview,
+            commands::get_local_llm_status,
+            commands::get_local_models_overview,
+            commands::download_local_server,
+            commands::download_local_model,
+            commands::cancel_local_model_download,
+            commands::pause_local_model_download,
+            commands::cancel_local_server_download,
+            commands::delete_local_model,
+            commands::delete_local_model_partial,
+            commands::add_custom_local_model,
+            commands::remove_custom_local_model,
+            commands::set_local_model,
+            commands::set_local_dedup_model,
+            commands::start_local_llm_download,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.app_handle().try_state::<Arc<AppState>>() {
+                    state.local_llm.shutdown();
+                    state.local_embed.shutdown();
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            match event {
+                tauri::RunEvent::ExitRequested { .. } => {
+                    if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
+                        state.local_llm.shutdown();
+                        state.local_embed.shutdown();
+                    }
+                }
+                tauri::RunEvent::Exit => {
+                    if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
+                        state.local_llm.shutdown();
+                        state.local_embed.shutdown();
+                    }
+                }
+                _ => {}
+            }
+        });
 }

@@ -1,0 +1,12 @@
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = NVIDIA GeForce RTX 4070 (NVIDIA) | uma: 0 | fp16: 1 | warp size: 32 | shared memory: 49152 | matrix cores: NV_coopmat2
+build: 4897 (b3c9a656) with MSVC 19.43.34808.0 for x64
+system info: n_threads = 24, n_threads_batch = 24, total_threads = 32
+
+system_info: n_threads = 24 (n_threads_batch = 24) / 32 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | AARCH64_REPACK = 1 | 
+
+main: HTTP server is listening, hostname: 127.0.0.1, port: 18767, http threads: 31
+main: loading model
+srv    load_model: loading model '..\models\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf'
+llama_model_load_from_file_impl: using device Vulkan0 (NVIDIA GeForce RTX 4070) - 12012 MiB free
+llama_model_load: error loading model: tensor 'output_norm.weight' data is not within the file bounds, model is corrupted or incomplete

@@ -26,10 +26,17 @@ $AppDir = Join-Path $OutDir "app"
 if (Test-Path $OutDir) {
     Get-ChildItem $OutDir -Exclude "app" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     if (Test-Path $AppDir) {
-        Get-ChildItem $AppDir -Exclude "data" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem $AppDir -Exclude "data","llm" | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 New-Item -ItemType Directory -Path $AppDir -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $AppDir "llm\bin") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $AppDir "llm/models") -Force | Out-Null
+
+$BundledServer = Join-Path $Root "resources/llm/llama-server.exe"
+if (Test-Path $BundledServer) {
+    Copy-Item $BundledServer (Join-Path $AppDir "llm/bin/llama-server.exe")
+}
 
 $ReleaseExe = Join-Path $Root "src-tauri\target\release\gaming-news-publisher.exe"
 if (-not (Test-Path $ReleaseExe)) {
@@ -68,6 +75,8 @@ Gaming News Publisher - Portable
 Данные приложения хранятся в:
   app\data\
   (gaming_news.db, settings.json)
+  app\llm\
+  (llama-server.exe, models — локальный AI)
 
 При ошибке запуска смотрите launcher-error.log в этой папке.
 "@ | Set-Content (Join-Path $OutDir "README.txt") -Encoding UTF8

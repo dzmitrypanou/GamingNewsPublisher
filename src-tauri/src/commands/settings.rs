@@ -3,16 +3,17 @@ use crate::scheduler::FetchConfig;
 use crate::models::{ApiTestResult, AppSettings};
 use crate::services::{deepseek, proxy, settings_store, telegram_api, vk_api};
 use crate::AppState;
+use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_settings(state: State<'_, std::sync::Arc<AppState>>) -> Result<AppSettings, String> {
+pub fn get_settings(state: State<'_, Arc<AppState>>) -> Result<AppSettings, String> {
     settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn save_settings(
-    state: State<'_, std::sync::Arc<AppState>>,
+    state: State<'_, Arc<AppState>>,
     settings: AppSettings,
 ) -> Result<(), String> {
     state
@@ -21,6 +22,36 @@ pub fn save_settings(
     settings_store::save_settings(&state.app_handle, &settings).map_err(|e| e.to_string())?;
     state.update_fetch_scheduler(FetchConfig::from_settings(&settings));
     state.update_auto_publish_scheduler(AutoPublishConfig::from_settings(&settings));
+
+    if settings.local_generation_needed() {
+        if state.local_llm.is_files_ready(&settings) {
+            let llm = state.local_llm.clone();
+            let settings = settings.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = llm.start(&settings).await {
+                    eprintln!("Local LLM start after settings save: {}", e);
+                }
+            });
+        }
+    } else {
+        state.local_llm.shutdown();
+    }
+
+    if settings.local_embed_needed() {
+        let dedup_id = settings.normalized_local_dedup_model_id();
+        if state.local_embed.is_files_ready(&dedup_id) {
+            let embed = state.local_embed.clone();
+            let settings = settings.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = embed.start(&settings, &dedup_id).await {
+                    eprintln!("Local embed start after settings save: {}", e);
+                }
+            });
+        }
+    } else {
+        state.local_embed.shutdown();
+    }
+
     Ok(())
 }
 
@@ -37,9 +68,12 @@ pub async fn test_telegram(state: State<'_, std::sync::Arc<AppState>>) -> Result
 }
 
 #[tauri::command]
-pub async fn test_deepseek(state: State<'_, std::sync::Arc<AppState>>) -> Result<ApiTestResult, String> {
+pub async fn test_deepseek(state: State<'_, Arc<AppState>>) -> Result<ApiTestResult, String> {
     let settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
-    Ok(deepseek::test_connection(&state.http_client(), &settings).await)
+    if settings.generation_uses_local() && state.local_llm.is_files_ready(&settings) {
+        state.local_llm.start(&settings).await.map_err(|e| e.to_string())?;
+    }
+    Ok(deepseek::test_connection(&state.http_client(), &settings, &state.local_llm).await)
 }
 
 #[tauri::command]

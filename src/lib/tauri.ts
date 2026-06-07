@@ -13,6 +13,7 @@ import type {
   DuplicatesOverview,
   UnpublishResult,
   RssPreviewItem,
+  LocalModelsOverview,
   Source,
 } from "./types";
 
@@ -34,6 +35,66 @@ export async function testTelegram(): Promise<ApiTestResult> {
 
 export async function testDeepseek(): Promise<ApiTestResult> {
   return invoke("test_deepseek");
+}
+
+export async function getLocalLlmStatus(): Promise<LocalModelsOverview> {
+  return invoke("get_local_models_overview");
+}
+
+export async function getLocalModelsOverview(): Promise<LocalModelsOverview> {
+  return invoke("get_local_models_overview");
+}
+
+export async function downloadLocalServer(): Promise<void> {
+  return invoke("download_local_server");
+}
+
+export async function downloadLocalModel(modelId: string): Promise<void> {
+  return invoke("download_local_model", { modelId });
+}
+
+export async function pauseLocalModelDownload(modelId: string): Promise<void> {
+  return invoke("pause_local_model_download", { modelId });
+}
+
+export async function cancelLocalModelDownload(modelId: string): Promise<void> {
+  return invoke("cancel_local_model_download", { modelId });
+}
+
+export async function cancelLocalServerDownload(): Promise<void> {
+  return invoke("cancel_local_server_download");
+}
+
+export async function deleteLocalModelPartial(modelId: string): Promise<void> {
+  return invoke("delete_local_model_partial", { modelId });
+}
+
+export async function deleteLocalModel(modelId: string): Promise<void> {
+  return invoke("delete_local_model", { modelId });
+}
+
+export async function addCustomLocalModel(
+  name: string,
+  description: string,
+  downloadUrl: string
+): Promise<void> {
+  return invoke("add_custom_local_model", { name, description, downloadUrl });
+}
+
+export async function removeCustomLocalModel(modelId: string): Promise<void> {
+  return invoke("remove_custom_local_model", { modelId });
+}
+
+export async function setLocalModel(modelId: string): Promise<void> {
+  return invoke("set_local_model", { modelId });
+}
+
+export async function setLocalDedupModel(modelId: string): Promise<void> {
+  return invoke("set_local_dedup_model", { modelId });
+}
+
+export async function startLocalLlmDownload(): Promise<void> {
+  return invoke("start_local_llm_download");
 }
 
 export async function testProxy(): Promise<ApiTestResult> {

@@ -1,8 +1,22 @@
 use crate::models::AppSettings;
-use crate::services::data_dir;
+use crate::services::{data_dir, llm_dir, local_model_catalog};
 use anyhow::Result;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
+
+fn resolve_active_model_id(model_id: &str) -> String {
+    let id = local_model_catalog::normalize_model_id(model_id);
+    if llm_dir::model_installed(id) {
+        return id.to_string();
+    }
+    if llm_dir::model_installed("deepseek-r1-7b") {
+        return "deepseek-r1-7b".into();
+    }
+    llm_dir::installed_model_ids()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| id.to_string())
+}
 
 pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
     let data_dir = data_dir::resolve(app)?;
@@ -32,6 +46,54 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("deepseek_model")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "deepseek-chat".to_string()),
+        ai_provider: store
+            .get("ai_provider")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "cloud".to_string()),
+        ai_generation_provider: store
+            .get("ai_generation_provider")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| {
+                store
+                    .get("ai_provider")
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "cloud".to_string())
+            }),
+        ai_duplicate_provider: store
+            .get("ai_duplicate_provider")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| {
+                store
+                    .get("ai_provider")
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "cloud".to_string())
+            }),
+        local_model_id: store
+            .get("local_model_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .map(|id| {
+                crate::services::local_model_catalog::normalize_model_id(&id).to_string()
+            })
+            .unwrap_or_else(|| crate::services::local_model_catalog::default_model_id().to_string()),
+        local_dedup_model_id: store
+            .get("local_dedup_model_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .map(|id| {
+                crate::services::local_model_catalog::normalize_model_id(&id).to_string()
+            })
+            .unwrap_or_else(|| {
+                crate::services::local_model_catalog::default_dedup_model_id().to_string()
+            }),
+        local_llm_device: store
+            .get("local_llm_device")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "gpu".to_string()),
+        local_llm_gpu_layers: store
+            .get("local_llm_gpu_layers")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(28)
+            .clamp(1, 99),
         ai_prompt_template: store
             .get("ai_prompt_template")
             .and_then(|v| v.as_str().map(String::from))
@@ -48,6 +110,30 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("fetch_items_per_source")
             .and_then(|v| v.as_u64())
             .unwrap_or(10) as u32,
+        fetch_sources_concurrency: store
+            .get("fetch_sources_concurrency")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(6)
+            .clamp(1, 20),
+        fetch_items_concurrency: store
+            .get("fetch_items_concurrency")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(4)
+            .clamp(1, 16),
+        ai_dedup_concurrency: store
+            .get("ai_dedup_concurrency")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(2)
+            .clamp(1, 10),
+        ai_process_concurrency: store
+            .get("ai_process_concurrency")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(3)
+            .clamp(1, 10),
         auto_publish: store
             .get("auto_publish")
             .and_then(|v| v.as_bool())
@@ -175,6 +261,14 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .map(|v| v as u32)
             .unwrap_or(0),
     };
+    let loaded_id = settings.local_model_id.clone();
+    let resolved_id = resolve_active_model_id(&loaded_id);
+    if resolved_id != loaded_id {
+        let mut settings = settings;
+        settings.local_model_id = resolved_id;
+        save_settings(app, &settings)?;
+        return Ok(settings);
+    }
     Ok(settings)
 }
 
@@ -197,6 +291,28 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     );
     store.set("deepseek_model", serde_json::json!(settings.deepseek_model));
     store.set(
+        "ai_provider",
+        serde_json::json!(settings.ai_generation_provider),
+    );
+    store.set(
+        "ai_generation_provider",
+        serde_json::json!(settings.ai_generation_provider),
+    );
+    store.set(
+        "ai_duplicate_provider",
+        serde_json::json!(settings.ai_duplicate_provider),
+    );
+    store.set("local_model_id", serde_json::json!(settings.local_model_id));
+    store.set(
+        "local_dedup_model_id",
+        serde_json::json!(settings.local_dedup_model_id),
+    );
+    store.set("local_llm_device", serde_json::json!(settings.local_llm_device));
+    store.set(
+        "local_llm_gpu_layers",
+        serde_json::json!(settings.local_llm_gpu_layers.clamp(1, 99)),
+    );
+    store.set(
         "ai_prompt_template",
         serde_json::json!(settings.ai_prompt_template),
     );
@@ -208,6 +324,22 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     store.set(
         "fetch_items_per_source",
         serde_json::json!(settings.fetch_items_per_source),
+    );
+    store.set(
+        "fetch_sources_concurrency",
+        serde_json::json!(settings.fetch_sources_concurrency.clamp(1, 20)),
+    );
+    store.set(
+        "fetch_items_concurrency",
+        serde_json::json!(settings.fetch_items_concurrency.clamp(1, 16)),
+    );
+    store.set(
+        "ai_dedup_concurrency",
+        serde_json::json!(settings.ai_dedup_concurrency.clamp(1, 10)),
+    );
+    store.set(
+        "ai_process_concurrency",
+        serde_json::json!(settings.ai_process_concurrency.clamp(1, 10)),
     );
     store.set("auto_publish", serde_json::json!(settings.auto_publish));
     store.set(

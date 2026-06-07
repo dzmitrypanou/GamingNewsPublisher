@@ -2,7 +2,8 @@ import { Badge } from "@/components/ui/badge";
 import type { PostStatus } from "@/lib/types";
 
 const statusConfig: Record<PostStatus, { label: string; variant: "default" | "secondary" | "success" | "warning" | "destructive" }> = {
-  new: { label: "Новый", variant: "secondary" },
+  new: { label: "Ожидает AI", variant: "secondary" },
+  processing: { label: "AI обработка", variant: "warning" },
   ai_processed: { label: "AI обработан", variant: "warning" },
   approved: { label: "Одобрен", variant: "default" },
   published: { label: "Опубликован", variant: "success" },

@@ -159,6 +159,14 @@ impl Database {
             [],
         )?;
 
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "busy_timeout", 5000)?;
+
+        conn.execute(
+            "UPDATE posts SET status='new' WHERE status='processing'",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -361,11 +369,29 @@ impl Database {
         raw_image_url: Option<&str>,
         category_id: Option<i64>,
     ) -> Result<i64> {
+        self.insert_post_if_new(
+            source_url,
+            raw_title,
+            raw_description,
+            raw_image_url,
+            category_id,
+        )?
+        .ok_or_else(|| anyhow::anyhow!("Post already exists: {}", source_url))
+    }
+
+    pub fn insert_post_if_new(
+        &self,
+        source_url: &str,
+        raw_title: &str,
+        raw_description: &str,
+        raw_image_url: Option<&str>,
+        category_id: Option<i64>,
+    ) -> Result<Option<i64>> {
         let conn = self.conn.lock().unwrap();
         let norm_url = duplicate::normalize_url(source_url);
         let norm_title = duplicate::normalize_title(raw_title);
         let now = Utc::now().to_rfc3339();
-        conn.execute(
+        match conn.execute(
             "INSERT INTO posts (source_url, raw_title, raw_description, raw_image_url, category_id, status, created_at, normalized_title, normalized_url)
              VALUES (?1, ?2, ?3, ?4, ?5, 'new', ?6, ?7, ?8)",
             params![
@@ -378,12 +404,65 @@ impl Database {
                 norm_title,
                 norm_url
             ],
-        )?;
-        let post_id = conn.last_insert_rowid();
-        drop(conn);
+        ) {
+            Ok(_) => {
+                let post_id = conn.last_insert_rowid();
+                drop(conn);
+                self.record_parsed(source_url, raw_title)?;
+                Ok(Some(post_id))
+            }
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
 
-        self.record_parsed(source_url, raw_title)?;
-        Ok(post_id)
+    pub fn get_posts_by_status(&self, status: &str, limit: i64) -> Result<Vec<Post>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+                    p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
+                    p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
+                    p.published_at, p.error_message
+             FROM posts p LEFT JOIN categories c ON p.category_id = c.id
+             WHERE p.status = ?1
+             ORDER BY p.created_at ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![status, limit], Self::map_post_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn count_posts_by_status(&self, status: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE status = ?1",
+            params![status],
+            |r| r.get(0),
+        )?;
+        Ok(count)
+    }
+
+    pub fn claim_post_for_ai(&self, id: i64) -> bool {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE posts SET status='processing' WHERE id=?1 AND status='new'",
+            params![id],
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false)
+    }
+
+    pub fn release_post_ai_claim(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE posts SET status='new' WHERE id=?1 AND status='processing'",
+            params![id],
+        )?;
+        Ok(())
     }
 
     pub fn record_ai_duplicate(
@@ -722,12 +801,12 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM publish_log WHERE post_id IN (
-                SELECT id FROM posts WHERE status IN ('new', 'ai_processed', 'approved', 'failed')
+                SELECT id FROM posts WHERE status IN ('new', 'processing', 'ai_processed', 'approved', 'failed')
             )",
             [],
         )?;
         let deleted = conn.execute(
-            "DELETE FROM posts WHERE status IN ('new', 'ai_processed', 'approved', 'failed')",
+            "DELETE FROM posts WHERE status IN ('new', 'processing', 'ai_processed', 'approved', 'failed')",
             [],
         )?;
         Ok(deleted as i64)
@@ -860,7 +939,7 @@ impl Database {
         )?;
 
         let posts_pending: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM posts WHERE status IN ('new', 'ai_processed', 'approved')",
+            "SELECT COUNT(*) FROM posts WHERE status IN ('new', 'processing', 'ai_processed', 'approved')",
             [],
             |r| r.get(0),
         )?;
@@ -885,12 +964,47 @@ impl Database {
             )
             .optional()?;
 
+        let duplicates_total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM duplicate_records",
+            [],
+            |r| r.get(0),
+        )?;
+
+        let posts_waiting_ai: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE status = 'new'",
+            [],
+            |r| r.get(0),
+        )?;
+
+        let posts_processing_ai: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE status = 'processing'",
+            [],
+            |r| r.get(0),
+        )?;
+
+        let posts_ai_processed: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE status = 'ai_processed'",
+            [],
+            |r| r.get(0),
+        )?;
+
+        let posts_approved: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE status = 'approved'",
+            [],
+            |r| r.get(0),
+        )?;
+
         Ok(DashboardStats {
             posts_today,
             posts_pending,
             posts_published,
             sources_active,
             last_fetch_at,
+            duplicates_total,
+            posts_waiting_ai,
+            posts_processing_ai,
+            posts_ai_processed,
+            posts_approved,
         })
     }
 

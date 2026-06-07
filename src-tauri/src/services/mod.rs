@@ -1,8 +1,15 @@
+pub mod ai;
 pub mod data_dir;
 pub mod deepseek;
 pub mod duplicate;
 pub mod image_loader;
 pub mod image_processor;
+pub mod llm_dir;
+pub mod local_llm_download;
+pub mod local_llm_overview;
+pub mod custom_model_store;
+pub mod embedding_dedup;
+pub mod local_model_catalog;
 pub mod post_text;
 pub mod proxy;
 pub mod rss_fetcher;
