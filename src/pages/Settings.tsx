@@ -13,6 +13,7 @@ import {
   testVk,
   testTelegram,
   testDeepseek,
+  testProxy,
 } from "@/lib/tauri";
 import { dialog } from "@/lib/dialog";
 import type { AppSettings, ApiTestResult } from "@/lib/types";
@@ -46,6 +47,9 @@ const defaultSettings: AppSettings = {
   auto_approve: true,
   ai_duplicate_check: false,
   post_language: "ru",
+  proxy_enabled: false,
+  proxy_type: "http",
+  proxy_list: "",
 };
 
 export function Settings() {
@@ -119,11 +123,18 @@ export function Settings() {
     }
   };
 
-  const handleTest = async (platform: "vk" | "telegram" | "deepseek") => {
+  const handleTest = async (platform: "vk" | "telegram" | "deepseek" | "proxy") => {
     setTesting(platform);
     try {
       await saveSettings(settings);
-      const fn = platform === "vk" ? testVk : platform === "telegram" ? testTelegram : testDeepseek;
+      const fn =
+        platform === "vk"
+          ? testVk
+          : platform === "telegram"
+            ? testTelegram
+            : platform === "proxy"
+              ? testProxy
+              : testDeepseek;
       const result = await fn();
       setTestResults((prev) => ({ ...prev, [platform]: result }));
     } catch (e) {
@@ -280,6 +291,70 @@ export function Settings() {
               result={testResults.deepseek}
               onTest={handleTest}
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Прокси</CardTitle>
+            <CardDescription>
+              HTTP, HTTPS или SOCKS5 — для RSS, API и публикации. По одному прокси на строку.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Использовать прокси</Label>
+                <p className="text-xs text-muted-foreground">
+                  Запросы идут через список прокси с ротацией
+                </p>
+              </div>
+              <Switch
+                checked={settings.proxy_enabled}
+                onCheckedChange={(v) => update("proxy_enabled", v)}
+              />
+            </div>
+            {settings.proxy_enabled && (
+              <>
+                <div className="space-y-2">
+                  <Label>Тип прокси</Label>
+                  <select
+                    value={settings.proxy_type}
+                    onChange={(e) =>
+                      update("proxy_type", e.target.value as AppSettings["proxy_type"])
+                    }
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS</option>
+                    <option value="socks5">SOCKS5</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Применяется к строкам без явной схемы (http://, socks5://)
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Список прокси</Label>
+                  <Textarea
+                    value={settings.proxy_list}
+                    onChange={(e) => update("proxy_list", e.target.value)}
+                    rows={6}
+                    className="font-mono text-xs"
+                    placeholder={`192.168.1.1:8080\n10.0.0.2:3128@user:pass\nuser:pass@10.0.0.3:3128\n10.0.0.4:1080:login:password\nsocks5://1.2.3.4:1080`}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Форматы: IP:PORT · IP:PORT@LOGIN:PASS · LOGIN:PASS@IP:PORT ·
+                    IP:PORT:LOGIN:PASS · http(s)://... · socks5://...
+                  </p>
+                </div>
+                <TestButton
+                  platform="proxy"
+                  testing={testing}
+                  result={testResults.proxy}
+                  onTest={handleTest}
+                />
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -467,10 +542,10 @@ function TestButton({
   result,
   onTest,
 }: {
-  platform: "vk" | "telegram" | "deepseek";
+  platform: "vk" | "telegram" | "deepseek" | "proxy";
   testing: string | null;
   result?: ApiTestResult;
-  onTest: (p: "vk" | "telegram" | "deepseek") => void;
+  onTest: (p: "vk" | "telegram" | "deepseek" | "proxy") => void;
 }) {
   return (
     <div className="flex items-center gap-3">

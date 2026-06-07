@@ -27,7 +27,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
             .unwrap_or(&post.raw_description);
 
         if let Ok(Some(dup)) = deepseek::find_ai_duplicate_among_posts(
-            &state.http_client,
+            &state.http_client(),
             &settings,
             title,
             description,
@@ -60,7 +60,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
     let mut tg_message_result = String::new();
 
     match vk_api::publish_post(
-        &state.http_client,
+        &state.http_client(),
         &settings,
         &vk_message,
         image_url,
@@ -82,7 +82,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     match telegram_api::publish_post(
-        &state.http_client,
+        &state.http_client(),
         &settings,
         &tg_caption,
         image_url,
@@ -145,7 +145,7 @@ pub async fn do_unpublish(state: &AppState, id: i64) -> Result<UnpublishResult> 
     };
 
     if let Some(vk_post_id) = post.vk_post_id.as_deref() {
-        match vk_api::delete_post(&state.http_client, &settings, vk_post_id).await {
+        match vk_api::delete_post(&state.http_client(), &settings, vk_post_id).await {
             Ok(()) => {
                 vk_success = true;
                 vk_message = format!("Удалено: post #{}", vk_post_id);
@@ -159,7 +159,7 @@ pub async fn do_unpublish(state: &AppState, id: i64) -> Result<UnpublishResult> 
     }
 
     if let Some(tg_msg_id) = post.telegram_message_id.as_deref() {
-        match telegram_api::delete_message(&state.http_client, &settings, tg_msg_id).await {
+        match telegram_api::delete_message(&state.http_client(), &settings, tg_msg_id).await {
             Ok(()) => {
                 tg_success = true;
                 tg_message = format!("Удалено: message #{}", tg_msg_id);

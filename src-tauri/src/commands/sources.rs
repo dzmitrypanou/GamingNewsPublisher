@@ -69,7 +69,7 @@ pub async fn preview_source(
     state: State<'_, std::sync::Arc<AppState>>,
     url: String,
 ) -> Result<Vec<RssPreviewItem>, String> {
-    rss_fetcher::preview_rss(&state.http_client, &url)
+    rss_fetcher::preview_rss(&state.http_client(), &url)
         .await
         .map_err(|e| e.to_string())
 }

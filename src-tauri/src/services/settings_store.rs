@@ -88,6 +88,18 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("post_language")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "ru".to_string()),
+        proxy_enabled: store
+            .get("proxy_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        proxy_type: store
+            .get("proxy_type")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "http".to_string()),
+        proxy_list: store
+            .get("proxy_list")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
     };
     Ok(settings)
 }
@@ -143,6 +155,9 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
         serde_json::json!(settings.ai_duplicate_check),
     );
     store.set("post_language", serde_json::json!(settings.post_language));
+    store.set("proxy_enabled", serde_json::json!(settings.proxy_enabled));
+    store.set("proxy_type", serde_json::json!(settings.proxy_type));
+    store.set("proxy_list", serde_json::json!(settings.proxy_list));
     store.save()?;
     Ok(())
 }

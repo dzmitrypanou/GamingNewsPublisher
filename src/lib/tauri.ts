@@ -36,6 +36,10 @@ export async function testDeepseek(): Promise<ApiTestResult> {
   return invoke("test_deepseek");
 }
 
+export async function testProxy(): Promise<ApiTestResult> {
+  return invoke("test_proxy");
+}
+
 export async function getCategories(): Promise<Category[]> {
   return invoke("get_categories");
 }

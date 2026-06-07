@@ -17,6 +17,9 @@ export interface AppSettings {
   auto_approve: boolean;
   ai_duplicate_check: boolean;
   post_language: string;
+  proxy_enabled: boolean;
+  proxy_type: "http" | "https" | "socks5";
+  proxy_list: string;
 }
 
 export interface Category {

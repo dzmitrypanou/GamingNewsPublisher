@@ -4,6 +4,12 @@ use atom_syndication::Feed as AtomFeed;
 use regex::Regex;
 use reqwest::Client;
 use rss::Channel;
+use std::borrow::Cow;
+
+const RSS_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 GamingNewsPublisher/0.1";
+const RSS_ACCEPT: &str =
+    "application/rss+xml, application/atom+xml, application/xml, text/xml, */*";
 
 pub fn get_preset_sources() -> Vec<PresetSource> {
     vec![
@@ -28,7 +34,7 @@ pub fn get_preset_sources() -> Vec<PresetSource> {
         },
         PresetSource {
             name: "Kotaku".to_string(),
-            url: "https://kotaku.com/rss".to_string(),
+            url: "https://feeds.feedburner.com/kotaku".to_string(),
             category_name: "Обзоры".to_string(),
             group: "General Gaming News".to_string(),
         },
@@ -46,7 +52,7 @@ pub fn get_preset_sources() -> Vec<PresetSource> {
         },
         PresetSource {
             name: "Gematsu".to_string(),
-            url: "https://www.gematsu.com/feed".to_string(),
+            url: "https://feeds.feedburner.com/gematsu".to_string(),
             category_name: "Консоли".to_string(),
             group: "General Gaming News".to_string(),
         },
@@ -99,15 +105,54 @@ pub async fn fetch_rss_items(client: &Client, url: &str, limit: usize) -> Result
     parse_feed_bytes(&bytes, limit)
 }
 
+fn resolve_feed_url(url: &str) -> Cow<'_, str> {
+    let normalized = url.trim().trim_end_matches('/');
+    match normalized {
+        "https://kotaku.com/rss" | "http://kotaku.com/rss" => {
+            Cow::Borrowed("https://feeds.feedburner.com/kotaku")
+        }
+        "https://www.gematsu.com/feed" | "http://www.gematsu.com/feed" => {
+            Cow::Borrowed("https://feeds.feedburner.com/gematsu")
+        }
+        _ => Cow::Borrowed(url),
+    }
+}
+
+fn is_cloudflare_challenge(status: reqwest::StatusCode, body: &[u8]) -> bool {
+    if status != reqwest::StatusCode::FORBIDDEN {
+        return false;
+    }
+    let body_lower = String::from_utf8_lossy(body).to_ascii_lowercase();
+    body_lower.contains("challenges.cloudflare.com")
+        || body_lower.contains("cf-mitigated")
+        || body_lower.contains("just a moment")
+}
+
 async fn fetch_feed_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
+    let resolved_url = resolve_feed_url(url);
     let response = client
-        .get(url)
-        .header("User-Agent", "GamingNewsPublisher/0.1")
+        .get(resolved_url.as_ref())
+        .header("User-Agent", RSS_USER_AGENT)
+        .header("Accept", RSS_ACCEPT)
         .send()
         .await
         .context("Не удалось загрузить RSS")?;
 
-    Ok(response.bytes().await?.to_vec())
+    let status = response.status();
+    let bytes = response.bytes().await?.to_vec();
+
+    if status.is_success() {
+        return Ok(bytes);
+    }
+
+    if is_cloudflare_challenge(status, &bytes) {
+        anyhow::bail!(
+            "Cloudflare заблокировал доступ к ленте ({}). Для этого сайта используйте прокси-URL.",
+            status.as_u16()
+        );
+    }
+
+    anyhow::bail!("Не удалось загрузить RSS: HTTP {}", status.as_u16());
 }
 
 fn parse_feed_bytes(bytes: &[u8], limit: usize) -> Result<Vec<RssItem>> {
@@ -283,7 +328,7 @@ fn extract_img_from_html(html: &str) -> Option<String> {
 pub async fn fetch_og_image(client: &Client, url: &str) -> Option<String> {
     let response = client
         .get(url)
-        .header("User-Agent", "GamingNewsPublisher/0.1")
+        .header("User-Agent", RSS_USER_AGENT)
         .send()
         .await
         .ok()?;

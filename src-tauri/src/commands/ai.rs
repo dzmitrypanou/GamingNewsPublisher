@@ -17,7 +17,7 @@ pub async fn process_post_with_ai(
         .unwrap_or("Игры");
 
     let ai_result = deepseek::process_news(
-        &state.http_client,
+        &state.http_client(),
         &settings,
         &post.raw_title,
         &post.raw_description,

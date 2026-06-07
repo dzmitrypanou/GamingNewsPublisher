@@ -21,6 +21,9 @@ pub struct AppSettings {
     pub auto_approve: bool,
     pub ai_duplicate_check: bool,
     pub post_language: String,
+    pub proxy_enabled: bool,
+    pub proxy_type: String,
+    pub proxy_list: String,
 }
 
 impl Default for AppSettings {
@@ -44,6 +47,9 @@ impl Default for AppSettings {
             auto_approve: true,
             ai_duplicate_check: false,
             post_language: "ru".to_string(),
+            proxy_enabled: false,
+            proxy_type: "http".to_string(),
+            proxy_list: String::new(),
         }
     }
 }

@@ -13,8 +13,8 @@ use auto_publish_runtime::AutoPublishRuntime;
 use auto_publish_scheduler::{AutoPublishConfig, AutoPublishSchedulerHandle};
 use db::Database;
 use fetch_runtime::FetchRuntime;
-use reqwest::Client;
 use scheduler::{FetchConfig, SchedulerHandle};
+use services::proxy::HttpClientPool;
 use services::settings_store;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -22,7 +22,7 @@ use tauri::Manager;
 pub struct AppState {
     pub app_handle: tauri::AppHandle,
     pub db: Database,
-    pub http_client: Client,
+    http_pool: Mutex<HttpClientPool>,
     pub fetch_runtime: FetchRuntime,
     pub auto_publish_runtime: Arc<AutoPublishRuntime>,
     scheduler: Mutex<Option<SchedulerHandle>>,
@@ -30,6 +30,17 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn http_client(&self) -> reqwest::Client {
+        self.http_pool
+            .lock()
+            .expect("http pool poisoned")
+            .next()
+    }
+
+    pub fn rebuild_http_pool(&self, settings: &models::AppSettings) -> anyhow::Result<()> {
+        services::proxy::rebuild_pool(&self.http_pool, settings)
+    }
+
     pub fn update_fetch_scheduler(&self, config: FetchConfig) {
         if let Ok(guard) = self.scheduler.lock() {
             if let Some(handle) = guard.as_ref() {
@@ -59,19 +70,25 @@ pub fn run() {
             let db_path = services::data_dir::database_path(&data_dir);
             let database = Database::new(db_path)?;
 
-            let http_client = Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()?;
-
             let settings = settings_store::load_settings(&app_handle)
                 .unwrap_or_default();
+
+            let http_pool = HttpClientPool::from_settings(&settings)
+                .unwrap_or_else(|e| {
+                    eprintln!("HTTP pool init: {}", e);
+                    HttpClientPool::from_settings(&models::AppSettings {
+                        proxy_enabled: false,
+                        ..Default::default()
+                    })
+                    .expect("direct http client must build")
+                });
 
             let publish_runtime = Arc::new(AutoPublishRuntime::new());
 
             let state = Arc::new(AppState {
                 app_handle: app_handle.clone(),
                 db: database,
-                http_client,
+                http_pool: Mutex::new(http_pool),
                 fetch_runtime: FetchRuntime::new(),
                 auto_publish_runtime: publish_runtime.clone(),
                 scheduler: Mutex::new(None),
@@ -107,6 +124,7 @@ pub fn run() {
             commands::test_vk,
             commands::test_telegram,
             commands::test_deepseek,
+            commands::test_proxy,
             commands::get_categories,
             commands::update_category,
             commands::get_sources,

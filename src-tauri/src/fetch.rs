@@ -42,7 +42,7 @@ async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
             continue;
         }
 
-        match rss_fetcher::fetch_rss_items(&state.http_client, &source.url, items_per_source).await
+        match rss_fetcher::fetch_rss_items(&state.http_client(), &source.url, items_per_source).await
         {
             Ok(items) => {
                 scanned_items += items.len() as i64;
@@ -55,7 +55,7 @@ async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
                         match state.db.get_recent_posts(AI_DUPLICATE_CHECK_LIMIT) {
                             Ok(recent_posts) => {
                                 match deepseek::find_ai_duplicate_among_posts(
-                                    &state.http_client,
+                                    &state.http_client(),
                                     &settings,
                                     &item.title,
                                     &item.description,
@@ -96,7 +96,7 @@ async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
 
                     if image_url.is_none() {
                         image_url =
-                            rss_fetcher::fetch_og_image(&state.http_client, &item.link).await;
+                            rss_fetcher::fetch_og_image(&state.http_client(), &item.link).await;
                     }
 
                     match state.db.insert_post(
@@ -118,7 +118,7 @@ async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
                                         .unwrap_or("Игры");
 
                                     match deepseek::process_news(
-                                        &state.http_client,
+                                        &state.http_client(),
                                         &settings,
                                         &post.raw_title,
                                         &post.raw_description,
