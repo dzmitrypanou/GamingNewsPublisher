@@ -1,8 +1,12 @@
 pub mod data_dir;
 pub mod deepseek;
 pub mod duplicate;
+pub mod image_loader;
+pub mod image_processor;
+pub mod post_text;
 pub mod proxy;
 pub mod rss_fetcher;
 pub mod settings_store;
+pub mod watermark;
 pub mod telegram_api;
 pub mod vk_api;

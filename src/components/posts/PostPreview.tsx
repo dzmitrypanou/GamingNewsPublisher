@@ -1,4 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PostImage } from "@/components/posts/PostImage";
 
 interface PostPreviewProps {
   platform: "vk" | "telegram" | "unified";
@@ -51,8 +52,8 @@ export function PostPreview({ platform, title, text, hashtags, imageUrl }: PostP
         <div className="rounded-lg border border-border bg-background p-4">
           {imageUrl && (
             <div className="mb-3 overflow-hidden rounded-md bg-secondary">
-              <img
-                src={imageUrl}
+              <PostImage
+                url={imageUrl}
                 alt="Preview"
                 className="max-h-48 w-full object-cover"
                 onError={(e) => {

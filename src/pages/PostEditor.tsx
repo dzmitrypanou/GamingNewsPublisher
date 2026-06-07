@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PostImage } from "@/components/posts/PostImage";
 import { PostPreview } from "@/components/posts/PostPreview";
 import { StatusBadge } from "@/components/posts/StatusBadge";
 import { getPost, updatePost, processPostWithAi, publishPost, unpublishPost } from "@/lib/tauri";
@@ -175,8 +176,8 @@ export function PostEditor() {
               {post.raw_image_url && (
                 <div className="space-y-2">
                   <Label>Изображение</Label>
-                  <img
-                    src={post.raw_image_url}
+                  <PostImage
+                    url={post.raw_image_url}
                     alt=""
                     className="max-h-40 rounded-md object-cover"
                     onError={(e) => {

@@ -100,6 +100,80 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("proxy_list")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default(),
+        post_image_width: store
+            .get("post_image_width")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(1280)
+            .clamp(320, 4096),
+        post_image_height: store
+            .get("post_image_height")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(720)
+            .clamp(180, 4096),
+        watermark_enabled: store
+            .get("watermark_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        watermark_image: store
+            .get("watermark_image")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        watermark_opacity: store
+            .get("watermark_opacity")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(85)
+            .clamp(0, 100),
+        watermark_scale_percent: store
+            .get("watermark_scale_percent")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(18)
+            .clamp(5, 80),
+        watermark_position_mode: store
+            .get("watermark_position_mode")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "preset".to_string()),
+        watermark_preset: store
+            .get("watermark_preset")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "bottom_right".to_string()),
+        watermark_margin_x: store
+            .get("watermark_margin_x")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(24),
+        watermark_margin_y: store
+            .get("watermark_margin_y")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(24),
+        watermark_x: store
+            .get("watermark_x")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0),
+        watermark_y: store
+            .get("watermark_y")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0),
+        watermark_size_mode: store
+            .get("watermark_size_mode")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "scale".to_string()),
+        watermark_width_px: store
+            .get("watermark_width_px")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0),
+        watermark_height_px: store
+            .get("watermark_height_px")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0),
     };
     Ok(settings)
 }
@@ -158,6 +232,45 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     store.set("proxy_enabled", serde_json::json!(settings.proxy_enabled));
     store.set("proxy_type", serde_json::json!(settings.proxy_type));
     store.set("proxy_list", serde_json::json!(settings.proxy_list));
+    store.set(
+        "post_image_width",
+        serde_json::json!(settings.post_image_width.clamp(320, 4096)),
+    );
+    store.set(
+        "post_image_height",
+        serde_json::json!(settings.post_image_height.clamp(180, 4096)),
+    );
+    store.set("watermark_enabled", serde_json::json!(settings.watermark_enabled));
+    store.set("watermark_image", serde_json::json!(settings.watermark_image));
+    store.set(
+        "watermark_opacity",
+        serde_json::json!(settings.watermark_opacity.clamp(0, 100)),
+    );
+    store.set(
+        "watermark_scale_percent",
+        serde_json::json!(settings.watermark_scale_percent.clamp(5, 80)),
+    );
+    store.set(
+        "watermark_position_mode",
+        serde_json::json!(settings.watermark_position_mode),
+    );
+    store.set("watermark_preset", serde_json::json!(settings.watermark_preset));
+    store.set("watermark_margin_x", serde_json::json!(settings.watermark_margin_x));
+    store.set("watermark_margin_y", serde_json::json!(settings.watermark_margin_y));
+    store.set("watermark_x", serde_json::json!(settings.watermark_x));
+    store.set("watermark_y", serde_json::json!(settings.watermark_y));
+    store.set(
+        "watermark_size_mode",
+        serde_json::json!(settings.watermark_size_mode),
+    );
+    store.set(
+        "watermark_width_px",
+        serde_json::json!(settings.watermark_width_px),
+    );
+    store.set(
+        "watermark_height_px",
+        serde_json::json!(settings.watermark_height_px),
+    );
     store.save()?;
     Ok(())
 }

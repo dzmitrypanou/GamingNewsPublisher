@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ExternalLink, Loader2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PostImage } from "@/components/posts/PostImage";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { getPublishedPosts, unpublishPost } from "@/lib/tauri";
 import type { Post } from "@/lib/types";
@@ -83,8 +84,8 @@ export function History() {
                   className="flex items-start gap-4 rounded-md border border-border p-4"
                 >
                   {post.raw_image_url && (
-                    <img
-                      src={post.raw_image_url}
+                    <PostImage
+                      url={post.raw_image_url}
                       alt=""
                       className="h-14 w-14 rounded object-cover"
                       onError={(e) => {

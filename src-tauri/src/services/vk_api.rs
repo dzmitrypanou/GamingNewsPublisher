@@ -1,7 +1,9 @@
 use crate::models::{ApiTestResult, AppSettings};
+use crate::services::image_loader;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::json;
+use std::path::Path;
 
 pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTestResult {
     if settings.vk_token.is_empty() || settings.vk_group_id.is_empty() {
@@ -47,12 +49,13 @@ pub async fn publish_post(
     settings: &AppSettings,
     message: &str,
     image_url: Option<&str>,
+    data_dir: Option<&Path>,
 ) -> Result<String> {
     let group_id = settings.vk_group_id.trim().trim_start_matches('-');
     let owner_id = format!("-{}", group_id);
 
     let attachment = if let Some(img_url) = image_url {
-        match upload_photo(client, settings, &owner_id, img_url).await {
+        match upload_photo(client, settings, &owner_id, img_url, data_dir).await {
             Ok(att) => Some(att),
             Err(_) => None,
         }
@@ -121,8 +124,9 @@ pub async fn delete_post(
 async fn upload_photo(
     client: &Client,
     settings: &AppSettings,
-    owner_id: &str,
+    _owner_id: &str,
     image_url: &str,
+    data_dir: Option<&Path>,
 ) -> Result<String> {
     let group_id = settings.vk_group_id.trim().trim_start_matches('-');
 
@@ -140,12 +144,17 @@ async fn upload_photo(
         .as_str()
         .context("No upload_url")?;
 
-    let img_bytes = client
-        .get(image_url)
-        .send()
-        .await?
-        .bytes()
-        .await?;
+    let img_bytes = if let Some(dir) = data_dir {
+        image_loader::load_image_bytes(client, dir, image_url).await?
+    } else {
+        client
+            .get(image_url)
+            .send()
+            .await?
+            .bytes()
+            .await?
+            .to_vec()
+    };
 
     let form = reqwest::multipart::Form::new().part(
         "photo",
@@ -198,7 +207,8 @@ async fn upload_photo(
 }
 
 pub fn format_message(title: &str, text: &str, hashtags: &str) -> String {
-    let mut parts = vec![title.to_string(), String::new(), text.to_string()];
+    let bold_title = format!("**{}**", title.replace('*', ""));
+    let mut parts = vec![bold_title, String::new(), text.to_string()];
     if !hashtags.is_empty() {
         parts.push(String::new());
         parts.push(hashtags.to_string());

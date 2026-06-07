@@ -20,13 +20,14 @@ import {
 import { dialog } from "@/lib/dialog";
 import type { AppSettings, ApiTestResult } from "@/lib/types";
 import { cn, countProxyLines, mergeProxyLists } from "@/lib/utils";
+import { WatermarkEditor } from "@/components/settings/WatermarkEditor";
 
 const DEFAULT_PROMPT = `Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
 Все поля ответа строго на {language}.
 Формат ответа JSON:
 {
   "title": "короткий цепляющий заголовок (до 80 символов)",
-  "text": "2-4 предложения, понятно и без воды (до 500 символов)",
+  "text": "2-4 предложения в 1-2 абзаца, между абзацами пустая строка (\\n\\n), без ссылок (до 500 символов)",
   "hashtags": ["#игры", "#название_игры"]
 }
 Исходные данные: {title}, {description}, категория: {category}`;
@@ -53,6 +54,21 @@ const defaultSettings: AppSettings = {
   proxy_enabled: false,
   proxy_type: "http",
   proxy_list: "",
+  post_image_width: 1280,
+  post_image_height: 720,
+  watermark_enabled: false,
+  watermark_image: "",
+  watermark_opacity: 85,
+  watermark_scale_percent: 18,
+  watermark_position_mode: "preset",
+  watermark_preset: "bottom_right",
+  watermark_margin_x: 24,
+  watermark_margin_y: 24,
+  watermark_x: 0,
+  watermark_y: 0,
+  watermark_size_mode: "scale",
+  watermark_width_px: 0,
+  watermark_height_px: 0,
 };
 
 export function Settings() {
@@ -77,6 +93,11 @@ export function Settings() {
 
   const update = (key: keyof AppSettings, value: string | number | boolean) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
+    setSaved(false);
+  };
+
+  const patchSettings = (patch: Partial<AppSettings>) => {
+    setSettings((prev) => ({ ...prev, ...patch }));
     setSaved(false);
   };
 
@@ -488,6 +509,58 @@ export function Settings() {
                 />
               </>
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Изображения постов</CardTitle>
+            <CardDescription>
+              Размер картинок при сборе новостей: обрезка cover и сохранение в JPEG. По умолчанию
+              1280×720.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Ширина (px)</Label>
+                <Input
+                  type="number"
+                  min={320}
+                  max={4096}
+                  value={settings.post_image_width}
+                  onChange={(e) =>
+                    update(
+                      "post_image_width",
+                      Math.min(4096, Math.max(320, parseInt(e.target.value) || 1280))
+                    )
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Высота (px)</Label>
+                <Input
+                  type="number"
+                  min={180}
+                  max={4096}
+                  value={settings.post_image_height}
+                  onChange={(e) =>
+                    update(
+                      "post_image_height",
+                      Math.min(4096, Math.max(180, parseInt(e.target.value) || 720))
+                    )
+                  }
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Действует только для новых сборов. Уже сохранённые картинки не пересчитываются.
+              Соотношение сторон:{" "}
+              {(settings.post_image_width / settings.post_image_height).toFixed(2)}:1
+            </p>
+            <div className="border-t border-border pt-4">
+              <WatermarkEditor settings={settings} onChange={update} onPatch={patchSettings} />
+            </div>
           </CardContent>
         </Card>
 

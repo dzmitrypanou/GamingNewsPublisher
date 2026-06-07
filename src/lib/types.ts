@@ -20,7 +20,37 @@ export interface AppSettings {
   proxy_enabled: boolean;
   proxy_type: "http" | "https" | "socks5";
   proxy_list: string;
+  post_image_width: number;
+  post_image_height: number;
+  watermark_enabled: boolean;
+  watermark_image: string;
+  watermark_opacity: number;
+  watermark_scale_percent: number;
+  watermark_position_mode: WatermarkPositionMode;
+  watermark_preset: WatermarkPreset;
+  watermark_margin_x: number;
+  watermark_margin_y: number;
+  watermark_x: number;
+  watermark_y: number;
+  watermark_size_mode: WatermarkSizeMode;
+  watermark_width_px: number;
+  watermark_height_px: number;
 }
+
+export type WatermarkSizeMode = "scale" | "custom";
+
+export type WatermarkPositionMode = "preset" | "manual";
+
+export type WatermarkPreset =
+  | "top_left"
+  | "top_center"
+  | "top_right"
+  | "center_left"
+  | "center"
+  | "center_right"
+  | "bottom_left"
+  | "bottom_center"
+  | "bottom_right";
 
 export interface Category {
   id: number;

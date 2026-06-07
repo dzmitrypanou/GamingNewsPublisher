@@ -68,6 +68,10 @@ pub fn run() {
             let app_handle = app.handle().clone();
 
             let data_dir = services::data_dir::resolve(&app_handle)?;
+            app_handle
+                .asset_protocol_scope()
+                .allow_directory(&data_dir, true)
+                .map_err(|e| anyhow::anyhow!("asset scope: {}", e))?;
             let db_path = services::data_dir::database_path(&data_dir);
             let database = Database::new(db_path)?;
 
@@ -128,6 +132,10 @@ pub fn run() {
             commands::test_proxy,
             commands::pick_proxy_file,
             commands::fetch_proxy_list,
+            commands::pick_watermark_file,
+            commands::get_watermark_natural_size,
+            commands::resolve_local_image_path,
+            commands::read_local_image_data_url,
             commands::get_categories,
             commands::update_category,
             commands::get_sources,

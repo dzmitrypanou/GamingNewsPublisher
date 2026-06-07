@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Loader2, RefreshCw, Trash2, Trash } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { PostImage } from "@/components/posts/PostImage";
 import { StatusBadge } from "@/components/posts/StatusBadge";
 import { getPosts, deletePost, deleteQueuePosts } from "@/lib/tauri";
 import type { Post, PostStatus } from "@/lib/types";
@@ -146,8 +147,8 @@ export function Posts() {
                   className="flex items-center gap-4 rounded-md border border-border p-4 hover:bg-accent/50"
                 >
                   {post.raw_image_url && (
-                    <img
-                      src={post.raw_image_url}
+                    <PostImage
+                      url={post.raw_image_url}
                       alt=""
                       className="h-12 w-12 rounded object-cover"
                       onError={(e) => {

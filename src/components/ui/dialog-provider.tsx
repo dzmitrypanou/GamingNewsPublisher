@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AlertCircle, AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,8 +30,19 @@ const variantStyles: Record<
   },
 };
 
+function isDialogEnterKey(event: KeyboardEvent) {
+  return (
+    (event.key === "Enter" || event.code === "NumpadEnter") &&
+    !event.shiftKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  );
+}
+
 export function DialogProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<DialogRequest | null>(null);
+  const primaryButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => subscribeDialog(setRequest), []);
 
@@ -40,22 +51,39 @@ export function DialogProvider({ children }: { children: ReactNode }) {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
         if (request.kind === "confirm") {
           request.resolve(false);
-          setRequest(null);
         } else {
           request.resolve();
-          setRequest(null);
         }
+        setRequest(null);
+        return;
       }
-      if (event.key === "Enter" && request.kind === "confirm") {
-        request.resolve(true);
+
+      if (isDialogEnterKey(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (request.kind === "confirm") {
+          request.resolve(true);
+        } else {
+          request.resolve();
+        }
         setRequest(null);
       }
     };
 
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+
+    const focusTimer = window.setTimeout(() => {
+      primaryButtonRef.current?.focus();
+    }, 0);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.clearTimeout(focusTimer);
+    };
   }, [request]);
 
   const closeAlert = () => {
@@ -126,6 +154,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
                 </Button>
               )}
               <Button
+                ref={primaryButtonRef}
                 className={request.kind === "confirm" ? "w-full sm:flex-1" : "min-w-[120px]"}
                 variant={
                   request.kind === "confirm" && request.destructive

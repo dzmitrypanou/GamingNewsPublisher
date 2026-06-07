@@ -24,6 +24,21 @@ pub struct AppSettings {
     pub proxy_enabled: bool,
     pub proxy_type: String,
     pub proxy_list: String,
+    pub post_image_width: u32,
+    pub post_image_height: u32,
+    pub watermark_enabled: bool,
+    pub watermark_image: String,
+    pub watermark_opacity: u32,
+    pub watermark_scale_percent: u32,
+    pub watermark_position_mode: String,
+    pub watermark_preset: String,
+    pub watermark_margin_x: u32,
+    pub watermark_margin_y: u32,
+    pub watermark_x: u32,
+    pub watermark_y: u32,
+    pub watermark_size_mode: String,
+    pub watermark_width_px: u32,
+    pub watermark_height_px: u32,
 }
 
 impl Default for AppSettings {
@@ -50,6 +65,21 @@ impl Default for AppSettings {
             proxy_enabled: false,
             proxy_type: "http".to_string(),
             proxy_list: String::new(),
+            post_image_width: 1280,
+            post_image_height: 720,
+            watermark_enabled: false,
+            watermark_image: String::new(),
+            watermark_opacity: 85,
+            watermark_scale_percent: 18,
+            watermark_position_mode: "preset".to_string(),
+            watermark_preset: "bottom_right".to_string(),
+            watermark_margin_x: 24,
+            watermark_margin_y: 24,
+            watermark_x: 0,
+            watermark_y: 0,
+            watermark_size_mode: "scale".to_string(),
+            watermark_width_px: 0,
+            watermark_height_px: 0,
         }
     }
 }
@@ -59,7 +89,7 @@ pub const DEFAULT_PROMPT: &str = r##"Переведи игровую новос�
 Формат ответа JSON:
 {
   "title": "короткий цепляющий заголовок (до 80 символов)",
-  "text": "2-4 предложения, понятно и без воды (до 500 символов)",
+  "text": "2-4 предложения в 1-2 абзаца, между абзацами пустая строка (\\n\\n), без ссылок (до 500 символов)",
   "hashtags": ["#игры", "#название_игры"]
 }
 Исходные данные: {title}, {description}, категория: {category}"##;

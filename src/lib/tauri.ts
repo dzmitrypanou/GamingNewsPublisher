@@ -44,8 +44,26 @@ export async function pickProxyFile(): Promise<string> {
   return invoke("pick_proxy_file");
 }
 
+export async function pickWatermarkFile(): Promise<string> {
+  return invoke("pick_watermark_file");
+}
+
+export async function getWatermarkNaturalSize(
+  localRef: string
+): Promise<{ width: number; height: number }> {
+  return invoke("get_watermark_natural_size", { localRef });
+}
+
 export async function fetchProxyList(url: string): Promise<string> {
   return invoke("fetch_proxy_list", { url });
+}
+
+export async function resolveLocalImagePath(localRef: string): Promise<string> {
+  return invoke("resolve_local_image_path", { localRef });
+}
+
+export async function readLocalImageDataUrl(localRef: string): Promise<string> {
+  return invoke("read_local_image_data_url", { localRef });
 }
 
 export async function getCategories(): Promise<Category[]> {

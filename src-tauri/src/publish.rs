@@ -1,5 +1,5 @@
 use crate::models::{PublishResult, UnpublishResult};
-use crate::services::{deepseek, settings_store, telegram_api, vk_api};
+use crate::services::{data_dir, deepseek, post_text, settings_store, telegram_api, vk_api};
 use crate::AppState;
 use anyhow::Result;
 use chrono::Utc;
@@ -44,15 +44,18 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         }
     }
 
-    let text = post
-        .ai_text
-        .as_deref()
-        .unwrap_or(&post.raw_description);
+    let text = post_text::format_post_text(
+        post.ai_text
+            .as_deref()
+            .unwrap_or(&post.raw_description),
+    );
+    let title = post_text::strip_links_single_line(title);
     let hashtags = post.ai_hashtags.as_deref().unwrap_or("");
 
-    let vk_message = vk_api::format_message(title, text, hashtags);
-    let tg_caption = telegram_api::format_caption(title, text, hashtags);
+    let vk_message = vk_api::format_message(&title, &text, hashtags);
+    let tg_caption = telegram_api::format_caption(&title, &text, hashtags);
     let image_url = post.raw_image_url.as_deref();
+    let app_data_dir = data_dir::resolve(&state.app_handle).ok();
 
     let mut vk_success = false;
     let mut vk_message_result = String::new();
@@ -64,6 +67,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         &settings,
         &vk_message,
         image_url,
+        app_data_dir.as_deref(),
     )
     .await
     {
@@ -86,6 +90,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         &settings,
         &tg_caption,
         image_url,
+        app_data_dir.as_deref(),
     )
     .await
     {

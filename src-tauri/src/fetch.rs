@@ -1,5 +1,5 @@
 use crate::models::FetchResult;
-use crate::services::{deepseek, rss_fetcher, settings_store};
+use crate::services::{data_dir, deepseek, image_processor, post_text, rss_fetcher, settings_store};
 use crate::AppState;
 use anyhow::Result;
 
@@ -36,6 +36,8 @@ async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
     let items_per_source = settings.fetch_items_per_source.clamp(1, 50) as usize;
     let ai_duplicate_enabled =
         settings.ai_duplicate_check && !settings.deepseek_api_key.is_empty();
+    let app_data_dir = data_dir::resolve(&state.app_handle)?;
+    let image_options = image_processor::PostImageOptions::from_settings(&settings);
 
     for mut source in sources {
         if !source.enabled {
@@ -92,12 +94,16 @@ async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
                         }
                     }
 
-                    let mut image_url = item.image_url.clone();
-
-                    if image_url.is_none() {
-                        image_url =
-                            rss_fetcher::fetch_og_image(&state.http_client(), &item.link).await;
-                    }
+                    let image_url = image_processor::resolve_post_image(
+                        &state.http_client(),
+                        &app_data_dir,
+                        &item.link,
+                        &source.url,
+                        &item.title,
+                        item.image_url.as_deref(),
+                        image_options.clone(),
+                    )
+                    .await;
 
                     match state.db.insert_post(
                         &item.link,
@@ -129,10 +135,14 @@ async fn do_fetch_inner(state: &AppState) -> Result<FetchResult> {
                                         Ok(ai_result) => {
                                             let hashtags =
                                                 deepseek::format_hashtags(&ai_result.hashtags);
+                                            let title =
+                                                post_text::strip_links_single_line(&ai_result.title);
+                                            let text =
+                                                post_text::format_post_text(&ai_result.text);
                                             let _ = state.db.update_post_ai(
                                                 post_id,
-                                                &ai_result.title,
-                                                &ai_result.text,
+                                                &title,
+                                                &text,
                                                 &hashtags,
                                                 settings.auto_approve,
                                             );

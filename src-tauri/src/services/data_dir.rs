@@ -19,6 +19,18 @@ pub fn database_path(data_dir: &Path) -> PathBuf {
     data_dir.join(DB_FILE)
 }
 
+pub fn images_dir(data_dir: &Path) -> PathBuf {
+    let dir = data_dir.join("images");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn watermark_dir(data_dir: &Path) -> PathBuf {
+    let dir = data_dir.join("watermark");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 fn exe_data_dir() -> Result<PathBuf> {
     let data_dir = std::env::current_exe()
         .context("Failed to get executable path")?

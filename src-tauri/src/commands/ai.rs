@@ -1,5 +1,5 @@
 use crate::models::Post;
-use crate::services::{deepseek, settings_store};
+use crate::services::{deepseek, post_text, settings_store};
 use crate::AppState;
 use tauri::State;
 
@@ -27,13 +27,15 @@ pub async fn process_post_with_ai(
     .map_err(|e| e.to_string())?;
 
     let hashtags = deepseek::format_hashtags(&ai_result.hashtags);
+    let title = post_text::strip_links_single_line(&ai_result.title);
+    let text = post_text::format_post_text(&ai_result.text);
 
     state
         .db
         .update_post_ai(
             id,
-            &ai_result.title,
-            &ai_result.text,
+            &title,
+            &text,
             &hashtags,
             settings.auto_approve,
         )

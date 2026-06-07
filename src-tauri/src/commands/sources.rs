@@ -1,5 +1,5 @@
 use crate::models::{PresetSource, RssPreviewItem, Source};
-use crate::services::rss_fetcher;
+use crate::services::{data_dir, image_processor, rss_fetcher, settings_store};
 use crate::AppState;
 use tauri::State;
 
@@ -69,7 +69,34 @@ pub async fn preview_source(
     state: State<'_, std::sync::Arc<AppState>>,
     url: String,
 ) -> Result<Vec<RssPreviewItem>, String> {
-    rss_fetcher::preview_rss(&state.http_client(), &url)
+    let data_dir = data_dir::resolve(&state.app_handle).map_err(|e| e.to_string())?;
+    let settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+    let image_options = image_processor::PostImageOptions::from_settings(&settings);
+    let items = rss_fetcher::fetch_rss_items(&state.http_client(), &url, 3)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+
+    let mut preview = Vec::new();
+    for item in items {
+        let image_url = image_processor::resolve_post_image(
+            &state.http_client(),
+            &data_dir,
+            &item.link,
+            &url,
+            &item.title,
+            item.image_url.as_deref(),
+            image_options.clone(),
+        )
+        .await;
+
+        preview.push(RssPreviewItem {
+            title: item.title,
+            description: item.description,
+            link: item.link,
+            image_url,
+            pub_date: item.pub_date,
+        });
+    }
+
+    Ok(preview)
 }

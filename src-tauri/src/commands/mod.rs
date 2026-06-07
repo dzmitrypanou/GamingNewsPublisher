@@ -1,17 +1,21 @@
 mod ai;
 mod categories;
 mod duplicates;
+mod images;
 mod posts;
 mod proxy;
 mod rss;
 mod settings;
 mod sources;
+mod watermark;
 
 pub use ai::*;
 pub use categories::*;
 pub use duplicates::*;
+pub use images::*;
 pub use posts::*;
 pub use proxy::*;
 pub use rss::*;
 pub use settings::*;
 pub use sources::*;
+pub use watermark::*;

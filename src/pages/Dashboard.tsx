@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { PostImage } from "@/components/posts/PostImage";
 import { PostPreview } from "@/components/posts/PostPreview";
 import { StatusBadge } from "@/components/posts/StatusBadge";
 import { getDashboardStats, fetchNews, getAutomationStatus, getRecentPublishedPosts } from "@/lib/tauri";
@@ -360,8 +361,8 @@ export function Dashboard() {
                         className="flex items-center gap-4 rounded-lg border border-border bg-secondary/20 p-3 transition-colors hover:bg-accent/50"
                       >
                         {post.raw_image_url ? (
-                          <img
-                            src={post.raw_image_url}
+                          <PostImage
+                            url={post.raw_image_url}
                             alt=""
                             className="h-12 w-12 shrink-0 rounded-md object-cover"
                             onError={(e) => {
