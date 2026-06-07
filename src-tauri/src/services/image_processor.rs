@@ -170,18 +170,23 @@ pub async fn resolve_post_image(
 
     };
 
-    match download_and_save_post_image(client, data_dir, &url, false, options).await {
-
+    match download_and_save_post_image(
+        client,
+        data_dir,
+        &url,
+        article_url,
+        false,
+        options.clone(),
+    )
+    .await
+    {
         Ok(local_ref) => Some(local_ref),
-
         Err(e) => {
-
             eprintln!("Image normalize {}: {}", url, e);
-
-            Some(url)
-
+            // Do not fall back to og:image here — it would require fetching the article page.
+            // Just keep the original URL (rss thumbnail or previously fetched og:image).
+            fallback_remote_url(&url)
         }
-
     }
 
 }
@@ -211,42 +216,109 @@ async fn resolve_ign_image(
 
     };
 
-    let local_ref =
-        download_and_save_post_image(client, data_dir, &image_url, true, options).await?;
+    let local_ref = download_and_save_post_image(
+        client,
+        data_dir,
+        &image_url,
+        article_url,
+        ign_needs_left_crop(&image_url),
+        options,
+    )
+    .await?;
     Ok(Some(local_ref))
 
 }
 
 async fn download_and_save_post_image(
-
     client: &Client,
-
     data_dir: &Path,
-
     image_url: &str,
-
+    article_url: &str,
     is_ign: bool,
-
     options: PostImageOptions,
-
 ) -> Result<String> {
-
-    let bytes = download_image_bytes(client, image_url).await?;
-
-    let processed = process_post_image_bytes(&bytes, is_ign, options, data_dir)?;
-
+    let referer = rss_fetcher::site_referer(article_url)
+        .or_else(|| rss_fetcher::site_referer(image_url));
+    let bytes = download_image_bytes(client, image_url, referer.as_deref()).await?;
+    let processed = match process_post_image_bytes(&bytes, is_ign, options, data_dir) {
+        Ok(processed) => processed,
+        Err(e) => {
+            eprintln!("Image process {}: {}", image_url, e);
+            return Ok(fallback_remote_url(image_url).unwrap_or_else(|| image_url.to_string()));
+        }
+    };
     save_local_image(data_dir, &processed, image_url)
-
 }
 
 fn pick_ign_image_url(candidates: &[String], rss_image: Option<&str>) -> Option<String> {
+    let heroes: Vec<String> = candidates
+        .iter()
+        .filter(|url| is_ign_article_image(url))
+        .cloned()
+        .collect();
 
-    pick_best_candidate(candidates, rss_image)
+    if heroes.is_empty() {
+        return rss_image.map(String::from);
+    }
 
-        .or_else(|| rss_image.map(String::from))
+    let rss_base = rss_image.and_then(normalize_ign_base);
+    let primary_base = rss_base
+        .clone()
+        .or_else(|| normalize_ign_base(&heroes[0]));
 
-        .or_else(|| candidates.first().cloned())
+    if let Some(base) = primary_base {
+        let same_base: Vec<&String> = heroes
+            .iter()
+            .filter(|url| normalize_ign_base(url).as_deref() == Some(base.as_str()))
+            .collect();
 
+        if let Some(best) = same_base
+            .iter()
+            .filter(|url| url.contains("canvas="))
+            .max_by_key(|url| ign_download_width(url))
+        {
+            return Some((*best).clone());
+        }
+
+        if rss_base.is_some() {
+            if let Some(alt) = heroes
+                .iter()
+                .find(|url| normalize_ign_base(url).as_deref() != Some(base.as_str()))
+            {
+                return Some(alt.clone());
+            }
+        }
+
+        if let Some(first) = same_base.first() {
+            return Some((*first).clone());
+        }
+    }
+
+    heroes.first().cloned()
+}
+
+fn is_ign_article_image(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("/avatars/")
+        || lower.contains("/registration/")
+        || lower.contains("/kraken/")
+    {
+        return false;
+    }
+
+    lower.contains("ignimgs.com/") && lower.contains("/20")
+}
+
+fn ign_download_width(url: &str) -> u32 {
+    url.split('&')
+        .chain(url.split('?'))
+        .find_map(|part| part.strip_prefix("width="))
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+fn ign_needs_left_crop(image_url: &str) -> bool {
+    !image_url.contains("canvas=")
 }
 
 fn fallback_remote_url(url: &str) -> Option<String> {
@@ -357,23 +429,21 @@ pub async fn fetch_ign_image_candidates(
 ) -> Result<Vec<String>> {
 
     let response = client
-
         .get(article_url)
-
+        .header("User-Agent", rss_fetcher::user_agent())
         .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        );
 
-            "User-Agent",
+    let mut request = response;
+    if let Some(referer) = rss_fetcher::site_referer(article_url) {
+        request = request.header("Referer", referer);
+    }
 
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36 GamingNewsPublisher/0.1",
-
-        )
-
-        .header("Accept", "text/html,application/xhtml+xml")
-
+    let response = request
         .send()
-
         .await
-
         .context("IGN article fetch failed")?;
 
     if !response.status().is_success() {
@@ -425,13 +495,9 @@ fn extract_ign_image_urls(html: &str, download_width: u32) -> Vec<String> {
                     .unwrap_or_else(|| caps.get(0).unwrap().as_str());
 
                 if let Some(normalized) = normalize_ign_image_url(raw, download_width) {
-
-                    if seen.insert(normalized.clone()) {
-
+                    if is_ign_article_image(&normalized) && seen.insert(normalized.clone()) {
                         urls.push(normalized);
-
                     }
-
                 }
 
             }
@@ -536,28 +602,30 @@ fn normalize_ign_base(url: &str) -> Option<String> {
 
 }
 
-pub async fn download_image_bytes(client: &Client, url: &str) -> Result<Vec<u8>> {
-
-    let response = client
-
+pub async fn download_image_bytes(
+    client: &Client,
+    url: &str,
+    referer: Option<&str>,
+) -> Result<Vec<u8>> {
+    let mut request = client
         .get(url)
+        .header("User-Agent", rss_fetcher::user_agent())
+        .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
 
-        .header("User-Agent", "Mozilla/5.0 GamingNewsPublisher/0.1")
+    if let Some(referer) = referer {
+        request = request.header("Referer", referer);
+    }
 
+    let response = request
         .send()
-
         .await
-
         .with_context(|| format!("Download image {}", url))?;
 
     if !response.status().is_success() {
-
         anyhow::bail!("Image HTTP {} for {}", response.status(), url);
-
     }
 
     Ok(response.bytes().await?.to_vec())
-
 }
 
 fn encode_jpeg(img: &DynamicImage) -> Result<Vec<u8>> {
@@ -645,7 +713,44 @@ mod tests {
     }
 
     #[test]
+    fn picks_alternate_hero_when_rss_thumb_differs() {
+        let rss = Some("https://assets-prd.ignimgs.com/2026/06/a.jpeg");
+        let candidates = vec![
+            "https://assets-prd.ignimgs.com/2026/06/a.jpeg?width=1280".to_string(),
+            "https://assets-prd.ignimgs.com/2026/06/b.jpeg?width=1280".to_string(),
+        ];
+        let picked = pick_ign_image_url(&candidates, rss).unwrap();
+        assert!(picked.contains("/b.jpeg"));
+    }
 
+    #[test]
+    fn ign_picks_hero_not_author_avatar() {
+        let rss = Some("https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg");
+        let candidates = vec![
+            "https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg?width=1280&format=jpg&auto=webp&quality=80".to_string(),
+            "https://assets-prd.ignimgs.com/avatars/640f55c4f3866b000174a9c6/RD5zbE5b_400x400-1679594933868.jpg?crop=1%3A1&width=21&format=jpg&auto=webp&quality=80".to_string(),
+            "https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg?width=1280&canvas=1280%2C720&format=jpg&auto=webp&quality=80".to_string(),
+        ];
+        let picked = pick_ign_image_url(&candidates, rss).unwrap();
+        assert!(picked.contains("dark-heresy"));
+        assert!(!picked.contains("/avatars/"));
+        assert!(picked.contains("canvas=1280"));
+    }
+
+    #[test]
+    fn ign_article_image_filter_drops_avatars_and_logos() {
+        assert!(is_ign_article_image(
+            "https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg"
+        ));
+        assert!(!is_ign_article_image(
+            "https://assets-prd.ignimgs.com/avatars/640f55c4f3866b000174a9c6/RD5zbE5b_400x400.jpg"
+        ));
+        assert!(!is_ign_article_image(
+            "https://assets1.ignimgs.com/kraken/ign30-logo.png?width=96"
+        ));
+    }
+
+    #[test]
     fn picks_alternate_candidate() {
 
         let rss = Some("https://assets-prd.ignimgs.com/2026/06/a.jpeg");

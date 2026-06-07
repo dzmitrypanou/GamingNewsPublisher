@@ -176,6 +176,7 @@ pub fn run() {
             commands::get_posts,
             commands::get_post,
             commands::update_post,
+            commands::refresh_post_source,
             commands::delete_post,
             commands::fetch_news,
             commands::cancel_fetch_news,

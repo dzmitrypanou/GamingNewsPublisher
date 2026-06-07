@@ -27,6 +27,10 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("vk_token")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default(),
+        vk_user_token: store
+            .get("vk_user_token")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
         vk_group_id: store
             .get("vk_group_id")
             .and_then(|v| v.as_str().map(String::from))
@@ -261,6 +265,10 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or(0),
+        fetch_full_article_text: store
+            .get("fetch_full_article_text")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true),
         web_context_enabled: store
             .get("web_context_enabled")
             .and_then(|v| v.as_bool())
@@ -313,6 +321,7 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     let data_dir = data_dir::resolve(app)?;
     let store = app.store(data_dir::settings_path(&data_dir))?;
     store.set("vk_token", serde_json::json!(settings.vk_token));
+    store.set("vk_user_token", serde_json::json!(settings.vk_user_token));
     store.set("vk_group_id", serde_json::json!(settings.vk_group_id));
     store.set(
         "telegram_bot_token",
@@ -439,6 +448,10 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     store.set(
         "watermark_height_px",
         serde_json::json!(settings.watermark_height_px),
+    );
+    store.set(
+        "fetch_full_article_text",
+        serde_json::json!(settings.fetch_full_article_text),
     );
     store.set(
         "web_context_enabled",

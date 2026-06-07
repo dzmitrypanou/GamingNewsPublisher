@@ -25,6 +25,7 @@ impl Database {
         };
         db.migrate()?;
         db.seed_categories()?;
+        db.ensure_default_categories()?;
         Ok(db)
     }
 
@@ -171,6 +172,42 @@ impl Database {
             [],
         )?;
 
+        let eetimes_removed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM app_meta WHERE key = 'migration_removed_eetimes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if eetimes_removed == 0 {
+            conn.execute(
+                "DELETE FROM sources WHERE url LIKE '%eetimes.com%'",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO app_meta (key, value) VALUES ('migration_removed_eetimes', '1')",
+                [],
+            )?;
+        }
+
+        let polygon_removed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM app_meta WHERE key = 'migration_removed_polygon'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if polygon_removed == 0 {
+            conn.execute(
+                "DELETE FROM sources WHERE url LIKE '%polygon.com%'",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO app_meta (key, value) VALUES ('migration_removed_polygon', '1')",
+                [],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -231,6 +268,7 @@ impl Database {
             ("Инди", "#игры #инди", "indie, pixel, roguelike"),
             ("Анонсы", "#игры #анонс #релиз", "announce, release, trailer, reveal"),
             ("Обзоры", "#игры #обзор", "review, score, rating, gameplay"),
+            ("Наука", "#наука #science", "science, research, physics, technology"),
         ];
 
         for (name, hashtags, keywords) in defaults {
@@ -238,6 +276,25 @@ impl Database {
                 "INSERT INTO categories (name, hashtags, keywords, enabled) VALUES (?1, ?2, ?3, 1)",
                 params![name, hashtags, keywords],
             )?;
+        }
+        Ok(())
+    }
+
+    fn ensure_default_categories(&self) -> Result<()> {
+        let extras = [("Наука", "#наука #science", "science, research, physics, technology")];
+        let conn = self.conn.lock().unwrap();
+        for (name, hashtags, keywords) in extras {
+            let exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM categories WHERE name = ?1",
+                params![name],
+                |r| r.get(0),
+            )?;
+            if exists == 0 {
+                conn.execute(
+                    "INSERT INTO categories (name, hashtags, keywords, enabled) VALUES (?1, ?2, ?3, 1)",
+                    params![name, hashtags, keywords],
+                )?;
+            }
         }
         Ok(())
     }
@@ -826,6 +883,15 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_post_raw_description(&self, id: i64, raw_description: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE posts SET raw_description=?1 WHERE id=?2",
+            params![raw_description, id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_post_ai(
         &self,
         id: i64,
@@ -880,39 +946,62 @@ impl Database {
 
     pub fn get_next_publishable_post(&self) -> Result<Option<Post>> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+
+        let last_category_id: Option<Option<i64>> = conn
+            .query_row(
+                "SELECT category_id FROM posts
+                 WHERE status = 'published'
+                 ORDER BY COALESCE(published_at, created_at) DESC, id DESC
+                 LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(last_category_id) = last_category_id {
+            if let Some(post) =
+                Self::query_next_publishable_post(&conn, Some(last_category_id))?
+            {
+                return Ok(Some(post));
+            }
+        }
+
+        Self::query_next_publishable_post(&conn, None)
+    }
+
+    fn query_next_publishable_post(
+        conn: &Connection,
+        exclude_category_id: Option<Option<i64>>,
+    ) -> Result<Option<Post>> {
+        const SELECT: &str = "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
                     p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
                     p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
                     p.published_at, p.error_message
              FROM posts p LEFT JOIN categories c ON p.category_id = c.id
-             WHERE p.status IN ('ai_processed', 'approved')
-             ORDER BY p.created_at DESC
-             LIMIT 1",
-            [],
-            |row| {
-                Ok(Post {
-                    id: row.get(0)?,
-                    source_url: row.get(1)?,
-                    raw_title: row.get(2)?,
-                    raw_description: row.get(3)?,
-                    raw_image_url: row.get(4)?,
-                    ai_title: row.get(5)?,
-                    ai_text: row.get(6)?,
-                    ai_hashtags: row.get(7)?,
-                    category_id: row.get(8)?,
-                    category_name: row.get(9)?,
-                    status: row.get(10)?,
-                    vk_post_id: row.get(11)?,
-                    telegram_message_id: row.get(12)?,
-                    created_at: row.get(13)?,
-                    published_at: row.get(14)?,
-                    error_message: row.get(15)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(Into::into)
+             WHERE p.status IN ('ai_processed', 'approved')";
+
+        match exclude_category_id {
+            Some(category_id) => conn
+                .query_row(
+                    &format!(
+                        "{SELECT} AND COALESCE(p.category_id, -1) != COALESCE(?1, -1)
+                         ORDER BY p.created_at DESC
+                         LIMIT 1"
+                    ),
+                    params![category_id],
+                    Self::map_post_row,
+                )
+                .optional()
+                .map_err(Into::into),
+            None => conn
+                .query_row(
+                    &format!("{SELECT} ORDER BY p.created_at DESC LIMIT 1"),
+                    [],
+                    Self::map_post_row,
+                )
+                .optional()
+                .map_err(Into::into),
+        }
     }
 
     pub fn get_new_posts(&self) -> Result<Vec<Post>> {

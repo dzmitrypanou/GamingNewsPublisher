@@ -1,5 +1,6 @@
 export interface AppSettings {
   vk_token: string;
+  vk_user_token: string;
   vk_group_id: string;
   telegram_bot_token: string;
   telegram_channel_id: string;
@@ -46,6 +47,7 @@ export interface AppSettings {
   watermark_size_mode: WatermarkSizeMode;
   watermark_width_px: number;
   watermark_height_px: number;
+  fetch_full_article_text: boolean;
   web_context_enabled: boolean;
   web_search_provider: "off" | "article_only" | "tavily";
   tavily_api_key: string;
@@ -155,6 +157,7 @@ export interface AutomationStatus {
   last_fetch_skipped_seen: number;
   last_fetch_skipped_existing: number;
   last_fetch_skipped_duplicates: number;
+  last_fetch_skipped_rejected: number;
   last_fetch_errors: string[];
   auto_publish_enabled: boolean;
   auto_publish_interval_minutes: number;
@@ -263,6 +266,7 @@ export interface FetchResult {
   skipped_seen: number;
   skipped_existing: number;
   skipped_duplicates: number;
+  skipped_rejected: number;
   dedup_checked: number;
   dedup_eligible: number;
   errors: string[];

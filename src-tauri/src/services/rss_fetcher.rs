@@ -1,6 +1,7 @@
 use crate::models::{PresetSource, RssPreviewItem};
 use anyhow::{Context, Result};
 use atom_syndication::Feed as AtomFeed;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
 use rss::Channel;
@@ -13,6 +14,12 @@ const RSS_ACCEPT: &str =
 
 pub fn user_agent() -> &'static str {
     RSS_USER_AGENT
+}
+
+pub fn site_referer(url: &str) -> Option<String> {
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(https?://[^/]+)").expect("site referer"));
+    RE.captures(url)
+        .map(|cap| format!("{}/", &cap[1]))
 }
 
 pub fn get_preset_sources() -> Vec<PresetSource> {
@@ -37,27 +44,9 @@ pub fn get_preset_sources() -> Vec<PresetSource> {
             group: "General Gaming News".to_string(),
         },
         PresetSource {
-            name: "Kotaku".to_string(),
-            url: "https://feeds.feedburner.com/kotaku".to_string(),
-            category_name: "Обзоры".to_string(),
-            group: "General Gaming News".to_string(),
-        },
-        PresetSource {
             name: "PC Gamer".to_string(),
             url: "https://www.pcgamer.com/rss/".to_string(),
             category_name: "PC".to_string(),
-            group: "General Gaming News".to_string(),
-        },
-        PresetSource {
-            name: "Polygon".to_string(),
-            url: "https://www.polygon.com/rss/index.xml".to_string(),
-            category_name: "Обзоры".to_string(),
-            group: "General Gaming News".to_string(),
-        },
-        PresetSource {
-            name: "Gematsu".to_string(),
-            url: "https://feeds.feedburner.com/gematsu".to_string(),
-            category_name: "Консоли".to_string(),
             group: "General Gaming News".to_string(),
         },
         PresetSource {
@@ -86,12 +75,25 @@ pub fn get_preset_sources() -> Vec<PresetSource> {
             category_name: "Анонсы".to_string(),
             group: "Leaks & Rumors".to_string(),
         },
-        // Hardware & Tech
+        // Cybersport
         PresetSource {
-            name: "Tom's Hardware".to_string(),
-            url: "https://www.tomshardware.com/feeds/all".to_string(),
-            category_name: "PC".to_string(),
-            group: "Hardware & Tech".to_string(),
+            name: "RB.RU Cybersport".to_string(),
+            url: "https://rb.ru/feeds/tag/cybersport/".to_string(),
+            category_name: "Киберспорт".to_string(),
+            group: "Cybersport".to_string(),
+        },
+        // Science
+        PresetSource {
+            name: "Ars Technica".to_string(),
+            url: "https://arstechnica.com/feed/".to_string(),
+            category_name: "Наука".to_string(),
+            group: "Science".to_string(),
+        },
+        PresetSource {
+            name: "Quanta Magazine".to_string(),
+            url: "https://www.quantamagazine.org/feed/".to_string(),
+            category_name: "Наука".to_string(),
+            group: "Science".to_string(),
         },
     ]
 }
@@ -102,6 +104,7 @@ pub struct RssItem {
     pub link: String,
     pub image_url: Option<String>,
     pub pub_date: Option<String>,
+    pub categories: Vec<String>,
 }
 
 pub async fn fetch_rss_items(client: &Client, url: &str, limit: usize) -> Result<Vec<RssItem>> {
@@ -171,16 +174,33 @@ fn parse_feed_bytes(bytes: &[u8], limit: usize) -> Result<Vec<RssItem>> {
     anyhow::bail!("Не удалось разобрать RSS или Atom")
 }
 
+fn entry_rss_body(entry: &rss::Item) -> String {
+    if let Some(content) = entry.content() {
+        if !content.trim().is_empty() {
+            return content.to_string();
+        }
+    }
+
+    if let Some(content_ns) = entry.extensions().get("content") {
+        if let Some(encoded_exts) = content_ns.get("encoded") {
+            for ext in encoded_exts {
+                if let Some(value) = ext.value() {
+                    if !value.trim().is_empty() {
+                        return value.to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    entry.description().unwrap_or("").to_string()
+}
+
 fn parse_rss_channel(channel: &Channel, limit: usize) -> Vec<RssItem> {
     let mut items = Vec::new();
     for entry in channel.items().iter().take(limit) {
         let title = entry.title().unwrap_or("").to_string();
-        let description = clean_html(
-            entry
-                .description()
-                .or_else(|| entry.content())
-                .unwrap_or(""),
-        );
+        let description = clean_html(&entry_rss_body(entry));
         let link = entry
             .link()
             .or_else(|| entry.guid().map(|g| g.value()))
@@ -189,6 +209,11 @@ fn parse_rss_channel(channel: &Channel, limit: usize) -> Vec<RssItem> {
 
         let image_url = extract_image_from_entry(entry);
         let pub_date = entry.pub_date().map(|s| s.to_string());
+        let categories = entry
+            .categories()
+            .iter()
+            .map(|c| c.name().to_string())
+            .collect();
 
         if !link.is_empty() {
             items.push(RssItem {
@@ -197,6 +222,7 @@ fn parse_rss_channel(channel: &Channel, limit: usize) -> Vec<RssItem> {
                 link,
                 image_url,
                 pub_date,
+                categories,
             });
         }
     }
@@ -232,6 +258,11 @@ fn parse_atom_feed(feed: &AtomFeed, limit: usize) -> Vec<RssItem> {
             .published()
             .map(|d| d.to_rfc3339())
             .or_else(|| Some(entry.updated().to_rfc3339()));
+        let categories = entry
+            .categories()
+            .iter()
+            .map(|c| c.term().to_string())
+            .collect();
 
         if !link.is_empty() {
             items.push(RssItem {
@@ -240,6 +271,7 @@ fn parse_atom_feed(feed: &AtomFeed, limit: usize) -> Vec<RssItem> {
                 link,
                 image_url,
                 pub_date,
+                categories,
             });
         }
     }
@@ -297,11 +329,22 @@ pub fn clean_html(input: &str) -> String {
     strip_feed_boilerplate(&text)
 }
 
+/// Remove RSS/WordPress attribution footers without altering paragraph breaks.
+pub fn strip_boilerplate(text: &str) -> String {
+    strip_feed_boilerplate(text)
+}
+
 /// RSS feeds often end descriptions with `<a href="...">Read more</a>` — tag stripping leaves the link text.
+/// WordPress feeds add "The post … first appeared on …" / "appeared first on …" attribution lines.
 fn strip_feed_boilerplate(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return String::new();
+    let mut result = text.trim().to_string();
+    if result.is_empty() {
+        return result;
+    }
+
+    for re in BOILERPLATE_TAIL_PATTERNS.iter() {
+        result = re.replace(&result, "").into_owned();
+        result = result.trim().to_string();
     }
 
     static SUFFIXES: &[&str] = &[
@@ -317,22 +360,88 @@ fn strip_feed_boilerplate(text: &str) -> String {
         "read the full story.",
         "view full article",
         "view full article.",
+        "source",
+        "source.",
         "читать далее",
         "читать далее.",
         "подробнее",
         "подробнее.",
+        "подробнее в статье",
+        "подробнее в статье.",
+        "подробности в статье",
+        "подробности в статье.",
     ];
 
-    let lower = trimmed.to_ascii_lowercase();
-    for suffix in SUFFIXES {
-        if lower.ends_with(suffix) {
-            let cut = trimmed.len().saturating_sub(suffix.len());
-            return trimmed[..cut].trim_end().trim_end_matches('.').trim().to_string();
+    loop {
+        let lower = result.to_ascii_lowercase();
+        let mut stripped = false;
+        for suffix in SUFFIXES {
+            if lower.ends_with(suffix) {
+                let cut = result.len().saturating_sub(suffix.len());
+                result = result[..cut].trim_end().trim_end_matches('.').trim().to_string();
+                stripped = true;
+                break;
+            }
+        }
+        if !stripped {
+            break;
         }
     }
 
-    trimmed.to_string()
+    result
 }
+
+/// Standalone attribution / footer paragraph — drop when parsing full article text.
+pub fn is_boilerplate_paragraph(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed.len() > 280 {
+        return false;
+    }
+    BOILERPLATE_PARAGRAPH_PATTERNS
+        .iter()
+        .any(|re| re.is_match(trimmed))
+}
+
+static BOILERPLATE_TAIL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    [
+        // WordPress: "The post Title first appeared on Site."
+        r"(?is)\s*the post\b.*?\bfirst appeared on\b.*$",
+        // WordPress: "... appeared first on Site Name ."
+        r"(?is)\s+(?:\S+\s+)?appeared first on\b.*$",
+        r"(?is)\s*\boriginally published (?:on|at|in)\b.*$",
+        r"(?is)\s*\bas originally published (?:on|at|in)\b.*$",
+        r"(?is)\s*\bthis (?:story|article) (?:was )?(?:originally )?published (?:on|at|in)\b.*$",
+        r"(?is)\s*\bcontinue reading (?:at|on)\b.*$",
+        r"(?is)\s*\bclick here to (?:read|view)\b.*$",
+        r"(?is)\s*\bfor more, (?:read|visit|see)\b.*$",
+        r"(?is)\s*\bподробнее в статье\.?\s*$",
+        r"(?is)\s*\bподробности в статье\.?\s*$",
+        r"(?is)\s*\bimage credit\b:.*$",
+    ]
+    .iter()
+    .filter_map(|p| Regex::new(p).ok())
+    .collect()
+});
+
+static BOILERPLATE_PARAGRAPH_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    [
+        r"(?is)^the post\b.*\bfirst appeared on\b",
+        r"(?is)^.*\bappeared first on\b",
+        r"(?is)^(?:read|view|see) (?:more|full (?:story|article))\.?$",
+        r"(?is)^continue reading\.?$",
+        r"(?is)^source\.?$",
+        r"(?is)^originally published (?:on|at|in)\b",
+        r"(?is)^this (?:story|article) (?:was )?(?:originally )?published\b",
+        r"(?is)^читать далее\.?$",
+        r"(?is)^подробнее\.?$",
+    ]
+    .iter()
+    .filter_map(|p| Regex::new(p).ok())
+    .collect()
+});
 
 fn extract_image_from_entry(entry: &rss::Item) -> Option<String> {
     if let Some(enclosure) = entry.enclosure() {
@@ -359,11 +468,7 @@ fn extract_image_from_entry(entry: &rss::Item) -> Option<String> {
         }
     }
 
-    let desc = entry
-        .description()
-        .or_else(|| entry.content())
-        .unwrap_or("");
-    extract_img_from_html(desc)
+    extract_img_from_html(&entry_rss_body(entry))
 }
 
 fn extract_img_from_html(html: &str) -> Option<String> {
@@ -372,12 +477,19 @@ fn extract_img_from_html(html: &str) -> Option<String> {
 }
 
 pub async fn fetch_og_image(client: &Client, url: &str) -> Option<String> {
-    let response = client
+    let mut request = client
         .get(url)
         .header("User-Agent", RSS_USER_AGENT)
-        .send()
-        .await
-        .ok()?;
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        );
+
+    if let Some(referer) = site_referer(url) {
+        request = request.header("Referer", referer);
+    }
+
+    let response = request.send().await.ok()?;
     let html = response.text().await.ok()?;
 
     let patterns = [
@@ -411,5 +523,109 @@ mod tests {
     fn clean_html_preserves_normal_text() {
         let html = "Normal description without boilerplate.";
         assert_eq!(clean_html(html), "Normal description without boilerplate.");
+    }
+
+    #[test]
+    fn clean_html_strips_appeared_first_on_attribution() {
+        let html = r#"See how Taiwan leads the chip industry today. <a href="https://example.com/">appeared first on Example Site</a>."#;
+        let out = clean_html(html);
+        assert!(out.contains("Taiwan leads"));
+        assert!(!out.to_ascii_lowercase().contains("appeared first on"));
+        assert!(!out.to_ascii_lowercase().contains("example site"));
+    }
+
+    #[test]
+    fn clean_html_strips_wordpress_first_appeared_on() {
+        let html = "Planarians are fascinating. The post Title first appeared on Quanta Magazine.";
+        let out = clean_html(html);
+        assert!(out.contains("Planarians"));
+        assert!(!out.to_ascii_lowercase().contains("first appeared on"));
+    }
+
+    #[test]
+    fn site_referer_extracts_origin() {
+        assert_eq!(
+            site_referer("https://www.example.com/article/slug/").as_deref(),
+            Some("https://www.example.com/")
+        );
+        assert_eq!(
+            site_referer("https://www.example.com/uploads/test.jpg").as_deref(),
+            Some("https://www.example.com/")
+        );
+    }
+
+    #[test]
+    fn ign_feed_extracts_image_from_content_encoded() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+            <channel><item>
+                <title>Warhammer</title>
+                <description></description>
+                <content:encoded><![CDATA[<section class="article-page"><img src="https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg"/>]]></content:encoded>
+            </item></channel></rss>"#;
+        let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
+        let url = extract_image_from_entry(&channel.items()[0]);
+        assert_eq!(
+            url.as_deref(),
+            Some("https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg")
+        );
+    }
+
+    #[test]
+    fn feed_extracts_enclosure_image() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <rss version="2.0"><channel><item>
+                <title>Sample article</title>
+                <link>https://example.com/article/</link>
+                <enclosure url="https://example.com/uploads/keyart.png" length="6252" type="image/jpeg"/>
+            </item></channel></rss>"#;
+        let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
+        let url = extract_image_from_entry(&channel.items()[0]);
+        assert_eq!(
+            url.as_deref(),
+            Some("https://example.com/uploads/keyart.png")
+        );
+    }
+
+    #[test]
+    fn feed_extracts_media_thumbnail() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+            <channel><item>
+                <title>Test</title>
+                <media:thumbnail url="https://example.com/uploads/test.jpg" />
+            </item></channel></rss>"#;
+        let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
+        let url = extract_image_from_entry(&channel.items()[0]);
+        assert_eq!(
+            url.as_deref(),
+            Some("https://example.com/uploads/test.jpg")
+        );
+    }
+
+    #[test]
+    fn quanta_feed_extracts_media_content_images() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+            <channel><item>
+                <title>WebP item</title>
+                <media:content url="https://example.com/image.webp" type="image/jpg"/>
+            </item><item>
+                <title>JPG item</title>
+                <media:content url="https://example.com/image.jpg" type="image/jpg"/>
+            </item></channel></rss>"#;
+        let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
+        let webp = extract_image_from_entry(&channel.items()[0]);
+        assert_eq!(webp.as_deref(), Some("https://example.com/image.webp"));
+        let jpg = extract_image_from_entry(&channel.items()[1]);
+        assert_eq!(jpg.as_deref(), Some("https://example.com/image.jpg"));
+    }
+
+    #[test]
+    fn is_boilerplate_paragraph_detects_attribution_line() {
+        assert!(is_boilerplate_paragraph("a appeared first on Example Site ."));
+        assert!(is_boilerplate_paragraph(
+            "The post My Title first appeared on Quanta Magazine."
+        ));
+        assert!(!is_boilerplate_paragraph(
+            "While there's never any shortage of games releasing on Steam any given day."
+        ));
     }
 }

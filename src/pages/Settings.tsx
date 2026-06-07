@@ -37,6 +37,8 @@ import { WatermarkEditor } from "@/components/settings/WatermarkEditor";
 const DEFAULT_PROMPT = `Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
 Если исходный текст на другом языке — переведи. Если уже на {language} — перепиши живым языком для соцсетей.
 Не выдумывай факты: опирайся только на {title}, {description} и дополнительный контекст ниже.
+Не добавляй призывы «подробнее в статье», «читайте полностью», «следите за календарём релизов», напоминания «чтобы ничего не пропустить», ссылки на источник и другие фразы-заглушки.
+Если текста мало — перескажи только доступные факты, без отсылок к полной статье.
 Все поля ответа строго на {language}.
 Формат ответа JSON:
 {
@@ -49,6 +51,7 @@ const DEFAULT_PROMPT = `Переведи игровую новость на {lan
 
 const defaultSettings: AppSettings = {
   vk_token: "",
+  vk_user_token: "",
   vk_group_id: "",
   telegram_bot_token: "",
   telegram_channel_id: "",
@@ -95,6 +98,7 @@ const defaultSettings: AppSettings = {
   watermark_size_mode: "scale",
   watermark_width_px: 0,
   watermark_height_px: 0,
+  fetch_full_article_text: true,
   web_context_enabled: true,
   web_search_provider: "article_only",
   tavily_api_key: "",
@@ -818,20 +822,46 @@ export function Settings() {
               <div className="space-y-3">
                 <p className="text-sm font-medium text-[#0077FF]">VKontakte</p>
                 <div className="space-y-2">
-                  <Label className="text-xs">Access Token</Label>
+                  <Label className="text-xs">Ключ сообщества</Label>
                   <Input
                     type="password"
                     value={settings.vk_token}
                     onChange={(e) => update("vk_token", e.target.value)}
                     placeholder="vk1.a...."
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Из группы: Управление → Работа с API → Ключи доступа (wall, photos, управление).
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">User token (для фото)</Label>
+                  <Input
+                    type="password"
+                    value={settings.vk_user_token}
+                    onChange={(e) => update("vk_user_token", e.target.value)}
+                    placeholder="vk1.a.... (необязательно)"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Токен администратора — для upload фото. На{" "}
+                    <a
+                      href="https://vkhost.github.io/"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline"
+                    >
+                      vkhost.github.io
+                    </a>{" "}
+                    обязательно отметьте: <strong>Фотографии</strong>, <strong>Стена</strong>,{" "}
+                    <strong>Группы</strong>, <strong>Бессрочный</strong>. Без «Фотографии» upload не
+                    работает — останется превью по ссылке на статью.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">ID группы</Label>
                   <Input
                     value={settings.vk_group_id}
                     onChange={(e) => update("vk_group_id", e.target.value)}
-                    placeholder="123456789"
+                    placeholder="123456789 или club123456789"
                   />
                 </div>
                 <TestButton
@@ -1170,6 +1200,13 @@ export function Settings() {
                 За сбор проверяется до (источники × это число) записей RSS. Новых постов может
                 быть меньше: в лентах часто меньше записей, плюс пропуск уже собранных ссылок и
                 дублей между источниками.
+              </p>
+            </div>
+            <div className="rounded-lg border border-border px-3 py-2">
+              <Label className="text-sm">Полный текст со страницы</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                При каждом сборе RSS приложение загружает статью по ссылке и сохраняет полный текст
+                вместо короткого описания из ленты.
               </p>
             </div>
             <div className={PANEL_BOX}>
@@ -1532,7 +1569,7 @@ export function Settings() {
                     value={settings.proxy_list}
                     onChange={(e) => update("proxy_list", e.target.value)}
                     rows={5}
-                    className="min-h-[120px] resize-y rounded-none border-0 bg-background font-mono text-xs leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0"
+                    className="resize-grip-flat min-h-[120px] resize-y rounded-none border-0 bg-background font-mono text-xs leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0"
                     placeholder={`192.168.1.1:8080\n10.0.0.2:3128@user:pass\nuser:pass@10.0.0.3:3128\n10.0.0.4:1080:login:password\nsocks5://1.2.3.4:1080`}
                   />
                 </div>

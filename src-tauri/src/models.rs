@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub struct AppSettings {
     pub vk_token: String,
+    pub vk_user_token: String,
     pub vk_group_id: String,
     pub telegram_bot_token: String,
     pub telegram_channel_id: String,
@@ -50,6 +51,7 @@ pub struct AppSettings {
     pub watermark_size_mode: String,
     pub watermark_width_px: u32,
     pub watermark_height_px: u32,
+    pub fetch_full_article_text: bool,
     pub web_context_enabled: bool,
     pub web_search_provider: String,
     pub tavily_api_key: String,
@@ -62,6 +64,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             vk_token: String::new(),
+            vk_user_token: String::new(),
             vk_group_id: String::new(),
             telegram_bot_token: String::new(),
             telegram_channel_id: String::new(),
@@ -108,6 +111,7 @@ impl Default for AppSettings {
             watermark_size_mode: "scale".to_string(),
             watermark_width_px: 0,
             watermark_height_px: 0,
+            fetch_full_article_text: true,
             web_context_enabled: true,
             web_search_provider: "article_only".to_string(),
             tavily_api_key: String::new(),
@@ -206,6 +210,8 @@ fn local_dedup_model_catalog_id() -> String {
 pub const DEFAULT_PROMPT: &str = r##"Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
 Если исходный текст на другом языке — переведи. Если уже на {language} — перепиши живым языком для соцсетей.
 Не выдумывай факты: опирайся только на {title}, {description} и дополнительный контекст ниже.
+Не добавляй призывы «подробнее в статье», «читайте полностью», «следите за календарём релизов», напоминания «чтобы ничего не пропустить», ссылки на источник и другие фразы-заглушки.
+Если текста мало — перескажи только доступные факты, без отсылок к полной статье.
 Все поля ответа строго на {language}.
 Формат ответа JSON:
 {
@@ -287,6 +293,7 @@ pub struct AutomationStatus {
     pub last_fetch_skipped_seen: i64,
     pub last_fetch_skipped_existing: i64,
     pub last_fetch_skipped_duplicates: i64,
+    pub last_fetch_skipped_rejected: i64,
     pub last_fetch_errors: Vec<String>,
     pub auto_publish_enabled: bool,
     pub auto_publish_interval_minutes: u32,
@@ -393,6 +400,7 @@ pub struct FetchResult {
     pub skipped_seen: i64,
     pub skipped_existing: i64,
     pub skipped_duplicates: i64,
+    pub skipped_rejected: i64,
     pub dedup_checked: i64,
     pub dedup_eligible: i64,
     pub errors: Vec<String>,

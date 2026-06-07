@@ -43,7 +43,7 @@ if (-not (Test-Path $ReleaseExe)) {
     Write-Error "Release binary not found: $ReleaseExe"
 }
 
-Copy-Item $ReleaseExe $AppDir
+Copy-Item $ReleaseExe (Join-Path $AppDir "Gaming News Publisher.exe")
 Copy-Item (Join-Path $Root "src-tauri\icons\icon.ico") $OutDir
 
 $LauncherSrc = Join-Path $Root "launcher\target\release\gaming-news-launcher.exe"
@@ -69,7 +69,7 @@ Gaming News Publisher - Portable
 
 Содержимое:
   Gaming News Publisher.exe  - тихий launcher (без cmd-окна)
-  app\gaming-news-publisher.exe - основное приложение
+  app\Gaming News Publisher.exe - основное приложение
   *-setup.exe (если есть) - установщик с WebView2
 
 Данные приложения хранятся в:

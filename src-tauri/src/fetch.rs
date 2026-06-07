@@ -1,5 +1,5 @@
 use crate::models::{FetchResult, Source};
-use crate::services::rss_fetcher::RssItem;
+use crate::services::rss_fetcher::{self, RssItem};
 use crate::services::{ai, data_dir, dedup_pipeline, image_processor, settings_store};
 use crate::AppState;
 use anyhow::Result;
@@ -18,6 +18,7 @@ pub(crate) struct FetchCounters {
     skipped_seen: AtomicI64,
     skipped_existing: AtomicI64,
     skipped_duplicates: AtomicI64,
+    skipped_rejected: AtomicI64,
     dedup_eligible: AtomicI64,
     dedup_checked: AtomicI64,
     errors: Mutex<Vec<String>>,
@@ -32,6 +33,7 @@ impl FetchCounters {
             skipped_seen: AtomicI64::new(0),
             skipped_existing: AtomicI64::new(0),
             skipped_duplicates: AtomicI64::new(0),
+            skipped_rejected: AtomicI64::new(0),
             dedup_eligible: AtomicI64::new(0),
             dedup_checked: AtomicI64::new(0),
             errors: Mutex::new(Vec::new()),
@@ -52,6 +54,7 @@ impl FetchCounters {
             skipped_seen: self.skipped_seen.load(Ordering::Relaxed),
             skipped_existing: self.skipped_existing.load(Ordering::Relaxed),
             skipped_duplicates: self.skipped_duplicates.load(Ordering::Relaxed),
+            skipped_rejected: self.skipped_rejected.load(Ordering::Relaxed),
             dedup_checked: self.dedup_checked.load(Ordering::Relaxed),
             dedup_eligible: self.dedup_eligible.load(Ordering::Relaxed),
             errors: self.errors.lock().map(|e| e.clone()).unwrap_or_default(),
@@ -74,6 +77,7 @@ pub async fn do_fetch(state: Arc<AppState>) -> Result<FetchResult> {
             skipped_seen: 0,
             skipped_existing: 0,
             skipped_duplicates: 0,
+            skipped_rejected: 0,
             dedup_checked: 0,
             dedup_eligible: 0,
             errors: vec![e.to_string()],
@@ -97,6 +101,7 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
             skipped_seen: 0,
             skipped_existing: 0,
             skipped_duplicates: 0,
+            skipped_rejected: 0,
             dedup_checked: 0,
             dedup_eligible: 0,
             errors: vec![],
@@ -190,6 +195,44 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
                         Ok(p) => p,
                         Err(_) => return,
                     };
+
+                    let mut item = item;
+                    if crate::services::content_filter::should_exclude_item(&item) {
+                        let _ = state.db.record_parsed_item(&item.link, &item.title);
+                        counters
+                            .skipped_rejected
+                            .fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+
+                    item.description = match timeout(
+                        Duration::from_secs(10),
+                        crate::services::web_context::enrich_rss_description(
+                            &state.http_client(),
+                            &item.link,
+                            &item.description,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(desc) => desc,
+                        Err(_) => {
+                            counters.push_error(format!(
+                                "Enrich timeout for {}",
+                                item.link
+                            ));
+                            rss_fetcher::strip_boilerplate(&item.description)
+                        }
+                    };
+
+                    if crate::services::content_filter::is_navigation_boilerplate(&item.description)
+                    {
+                        let _ = state.db.record_parsed_item(&item.link, &item.title);
+                        counters
+                            .skipped_rejected
+                            .fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
 
                     process_item(
                         state,
@@ -331,16 +374,27 @@ async fn process_item(
         return;
     }
 
-    let image_url = image_processor::resolve_post_image(
-        &state.http_client(),
-        app_data_dir,
-        &item.link,
-        &source.url,
-        &item.title,
-        item.image_url.as_deref(),
-        image_options,
+    let rss_image_fallback = item.image_url.clone();
+    let image_url = match timeout(
+        Duration::from_secs(30),
+        image_processor::resolve_post_image(
+            &state.http_client(),
+            app_data_dir,
+            &item.link,
+            &source.url,
+            &item.title,
+            item.image_url.as_deref(),
+            image_options,
+        ),
     )
-    .await;
+    .await
+    {
+        Ok(url) => url.or(rss_image_fallback),
+        Err(_) => {
+            counters.push_error(format!("Image timeout for {}", item.link));
+            rss_image_fallback
+        }
+    };
 
     match state.db.insert_post_if_new(
         &item.link,

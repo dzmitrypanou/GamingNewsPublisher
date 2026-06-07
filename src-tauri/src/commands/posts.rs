@@ -1,5 +1,5 @@
 use crate::models::{DashboardStats, Post, PublishLog, PublishResult, UnpublishResult};
-use crate::services::post_text;
+use crate::services::{post_text, web_context};
 use crate::AppState;
 use tauri::State;
 
@@ -92,6 +92,35 @@ pub async fn unpublish_post(
 #[tauri::command]
 pub fn delete_queue_posts(state: State<'_, std::sync::Arc<AppState>>) -> Result<i64, String> {
     state.db.delete_queue_posts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn refresh_post_source(
+    state: State<'_, std::sync::Arc<AppState>>,
+    id: i64,
+) -> Result<Post, String> {
+    let post = state.db.get_post(id).map_err(|e| e.to_string())?;
+    let enriched = web_context::enrich_rss_description(
+        &state.http_client(),
+        &post.source_url,
+        &post.raw_description,
+    )
+    .await;
+
+    if enriched.trim().is_empty() {
+        return Err("Не удалось загрузить текст статьи по ссылке".to_string());
+    }
+
+    state
+        .db
+        .update_post_raw_description(id, &enriched)
+        .map_err(|e| e.to_string())?;
+
+    state
+        .db
+        .get_post(id)
+        .map(sanitize_post)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

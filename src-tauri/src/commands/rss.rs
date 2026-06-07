@@ -66,6 +66,10 @@ pub fn get_automation_status(
             .as_ref()
             .map(|r| r.skipped_duplicates)
             .unwrap_or(0),
+        last_fetch_skipped_rejected: fetch_snapshot
+            .as_ref()
+            .map(|r| r.skipped_rejected)
+            .unwrap_or(0),
         last_fetch_errors: fetch_snapshot
             .as_ref()
             .map(|r| r.errors.clone())

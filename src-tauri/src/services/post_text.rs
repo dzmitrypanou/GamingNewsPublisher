@@ -69,21 +69,92 @@ fn split_paragraphs(text: &str) -> Vec<String> {
 fn strip_link_sentences_in_block(text: &str) -> String {
     split_into_segments(text)
         .into_iter()
-        .filter(|part| !contains_url(part))
+        .filter(|part| !should_drop_sentence(part))
         .collect::<Vec<_>>()
         .join(" ")
         .trim()
         .to_string()
 }
 
+fn should_drop_sentence(text: &str) -> bool {
+    contains_url(text) || is_cta_sentence(text)
+}
+
+fn normalize_cta_text(text: &str) -> String {
+    text.trim()
+        .trim_matches('*')
+        .trim()
+        .to_lowercase()
+}
+
+fn is_cta_sentence(text: &str) -> bool {
+    let lower = normalize_cta_text(text);
+    if lower.is_empty() {
+        return false;
+    }
+
+    const MARKERS: &[&str] = &[
+        "подробнее в статье",
+        "подробности в статье",
+        "читайте полностью",
+        "читать полностью",
+        "читайте в источнике",
+        "подробности по ссылке",
+        "следите за календар",
+        "следите за релиз",
+        "следите за новост",
+        "следите за обновлен",
+        "чтобы ничего не пропустить",
+        "чтобы не пропустить",
+        "не пропустите релиз",
+        "не пропустите выход",
+        "осталось следить за",
+        "следим за календар",
+        "read more",
+        "read the full",
+        "read the article",
+        "details in the article",
+        "more in the article",
+        "more details in the article",
+        "see the full article",
+        "full story",
+        "link in bio",
+        "click here to read",
+        "continue reading",
+        "stay tuned",
+        "don't miss",
+        "don’t miss",
+        "keep an eye on",
+        "follow for updates",
+        "watch for updates",
+    ];
+
+    if MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return true;
+    }
+
+    cta_regexes().iter().any(|re| re.is_match(&lower))
+}
+
+fn cta_regexes() -> &'static [Regex] {
+    static RES: OnceLock<Vec<Regex>> = OnceLock::new();
+    RES.get_or_init(|| {
+        [
+            r"следите за\b.{0,80}\b(?:чтобы )?ничего не пропустить",
+            r"следите за\b.{0,80}\b(?:релиз|календар|анонс|обновлен)",
+            r"(?:не )?пропустите\b.{0,60}\b(?:релиз|выход|анонс|новост)",
+            r"keep an eye on\b.{0,80}\b(?:release )?calendar",
+        ]
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect()
+    })
+}
+
 pub fn strip_links_single_line(text: &str) -> String {
     let text = text.trim();
     if text.is_empty() {
         return String::new();
-    }
-
-    if !contains_url(text) {
-        return normalize_inline_whitespace(text);
     }
 
     normalize_inline_whitespace(&strip_link_sentences_in_block(text))
@@ -97,13 +168,7 @@ pub fn format_post_text(text: &str) -> String {
 
     let stripped: Vec<String> = split_paragraphs(text)
         .into_iter()
-        .map(|paragraph| {
-            if contains_url(&paragraph) {
-                strip_link_sentences_in_block(&paragraph)
-            } else {
-                paragraph
-            }
-        })
+        .map(|paragraph| strip_link_sentences_in_block(&paragraph))
         .filter(|paragraph| !paragraph.is_empty())
         .collect();
 
@@ -184,5 +249,23 @@ mod tests {
     fn removes_www_link_sentence() {
         let input = "Подробности на www.ign.com/article";
         assert_eq!(format_post_text(input), "");
+    }
+
+    #[test]
+    fn removes_read_more_in_article_cta() {
+        let input = "Производство выросло в мае. Подробнее в статье.";
+        assert_eq!(
+            format_post_text(input),
+            "Производство выросло в мае."
+        );
+    }
+
+    #[test]
+    fn removes_release_calendar_cta() {
+        let input = "Осенью выйдет много игр, включая GTA 6. Следите за календарем релизов, чтобы ничего не пропустить.";
+        assert_eq!(
+            format_post_text(input),
+            "Осенью выйдет много игр, включая GTA 6."
+        );
     }
 }

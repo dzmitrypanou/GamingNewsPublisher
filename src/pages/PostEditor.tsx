@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Sparkles, Send, Undo2 } from "lucide-react";
+import { ArrowLeft, Loader2, Sparkles, Send, Undo2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PostImage } from "@/components/posts/PostImage";
 import { PostPreview } from "@/components/posts/PostPreview";
 import { StatusBadge } from "@/components/posts/StatusBadge";
-import { getPost, updatePost, processPostWithAi, publishPost, unpublishPost } from "@/lib/tauri";
+import { getPost, updatePost, processPostWithAi, publishPost, unpublishPost, refreshPostSource } from "@/lib/tauri";
 import { dialog } from "@/lib/dialog";
 import type { Post, PublishResult, UnpublishResult } from "@/lib/types";
 
@@ -21,6 +21,7 @@ export function PostEditor() {
   const [aiLoading, setAiLoading] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [unpublishing, setUnpublishing] = useState(false);
+  const [refreshingSource, setRefreshingSource] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
   const [unpublishResult, setUnpublishResult] = useState<UnpublishResult | null>(null);
 
@@ -100,6 +101,19 @@ export function PostEditor() {
       await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
     } finally {
       setUnpublishing(false);
+    }
+  };
+
+  const handleRefreshSource = async () => {
+    if (!post) return;
+    setRefreshingSource(true);
+    try {
+      const updated = await refreshPostSource(post.id);
+      setPost(updated);
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Не удалось обновить исходник", variant: "error" });
+    } finally {
+      setRefreshingSource(false);
     }
   };
 
@@ -249,12 +263,27 @@ export function PostEditor() {
           </Card>
 
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
               <CardTitle className="text-sm">Исходная новость</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefreshSource}
+                disabled={refreshingSource}
+              >
+                {refreshingSource ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                Загрузить с сайта
+              </Button>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
               <p className="font-medium text-foreground">{post.raw_title}</p>
-              <p className="mt-2 line-clamp-4">{post.raw_description}</p>
+              <p className="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap">
+                {post.raw_description}
+              </p>
             </CardContent>
           </Card>
         </div>

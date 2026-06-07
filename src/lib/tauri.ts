@@ -179,6 +179,10 @@ export async function updatePost(post: Post): Promise<void> {
   return invoke("update_post", { post });
 }
 
+export async function refreshPostSource(id: number): Promise<Post> {
+  return invoke("refresh_post_source", { id });
+}
+
 export async function deletePost(id: number): Promise<void> {
   return invoke("delete_post", { id });
 }

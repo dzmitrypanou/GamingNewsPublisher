@@ -19,7 +19,7 @@ fn launch() -> Result<(), String> {
         .ok_or("Cannot resolve launcher directory")?
         .to_path_buf();
 
-    let app_exe = launcher_dir.join("app").join("gaming-news-publisher.exe");
+    let app_exe = launcher_dir.join("app").join("Gaming News Publisher.exe");
     if !app_exe.exists() {
         return Err(format!("Application not found: {}", app_exe.display()));
     }

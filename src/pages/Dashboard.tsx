@@ -133,6 +133,7 @@ export function Dashboard() {
         skipped_seen: 0,
         skipped_existing: 0,
         skipped_duplicates: 0,
+        skipped_rejected: 0,
         dedup_checked: 0,
         dedup_eligible: 0,
         errors: [String(e)],
@@ -382,11 +383,18 @@ export function Dashboard() {
                     icon={Newspaper}
                     label="Добавлено"
                     value={String(automation?.last_fetch_new_posts ?? 0)}
-                    hint={
-                      (automation?.last_fetch_scanned_items ?? 0) > 0
-                        ? `из ${automation?.last_fetch_scanned_items} RSS`
-                        : "в прошлый раз"
-                    }
+                    hint={(() => {
+                      const scanned = automation?.last_fetch_scanned_items ?? 0;
+                      if (scanned <= 0) return "в прошлый раз";
+                      const skipped =
+                        (automation?.last_fetch_skipped_seen ?? 0) +
+                        (automation?.last_fetch_skipped_existing ?? 0) +
+                        (automation?.last_fetch_skipped_duplicates ?? 0) +
+                        (automation?.last_fetch_skipped_rejected ?? 0);
+                      return skipped > 0
+                        ? `из ${scanned} RSS · ${skipped} пропущено`
+                        : `из ${scanned} RSS`;
+                    })()}
                   />
                   {(fetchRunning && automation?.ai_duplicate_check_enabled) ||
                   (!fetchRunning &&
@@ -405,14 +413,16 @@ export function Dashboard() {
                   ) : null}
                   {(automation?.last_fetch_skipped_seen ?? 0) > 0 ||
                   (automation?.last_fetch_skipped_existing ?? 0) > 0 ||
-                  (automation?.last_fetch_skipped_duplicates ?? 0) > 0 ? (
+                  (automation?.last_fetch_skipped_duplicates ?? 0) > 0 ||
+                  (automation?.last_fetch_skipped_rejected ?? 0) > 0 ? (
                     <MetricTile
                       icon={Copy}
                       label="Пропущено при сборе"
                       value={String(
                         (automation?.last_fetch_skipped_seen ?? 0) +
                           (automation?.last_fetch_skipped_existing ?? 0) +
-                          (automation?.last_fetch_skipped_duplicates ?? 0)
+                          (automation?.last_fetch_skipped_duplicates ?? 0) +
+                          (automation?.last_fetch_skipped_rejected ?? 0)
                       )}
                       hint={[
                         (automation?.last_fetch_skipped_seen ?? 0) > 0
@@ -423,6 +433,9 @@ export function Dashboard() {
                           : null,
                         (automation?.last_fetch_skipped_duplicates ?? 0) > 0
                           ? `${automation?.last_fetch_skipped_duplicates} AI-дубль`
+                          : null,
+                        (automation?.last_fetch_skipped_rejected ?? 0) > 0
+                          ? `${automation?.last_fetch_skipped_rejected} не статья`
                           : null,
                       ]
                         .filter(Boolean)
@@ -553,12 +566,15 @@ export function Dashboard() {
                       hint="отправлено в очередь"
                     />
                     {(fetchResult.skipped_seen > 0 ||
-                      fetchResult.skipped_existing > 0) && (
+                      fetchResult.skipped_existing > 0 ||
+                      fetchResult.skipped_rejected > 0) && (
                       <MetricTile
                         icon={CheckCircle}
                         label="Пропущено"
                         value={String(
-                          fetchResult.skipped_seen + fetchResult.skipped_existing
+                          fetchResult.skipped_seen +
+                            fetchResult.skipped_existing +
+                            fetchResult.skipped_rejected
                         )}
                         hint={[
                           fetchResult.skipped_seen > 0
@@ -566,6 +582,9 @@ export function Dashboard() {
                             : null,
                           fetchResult.skipped_existing > 0
                             ? `${fetchResult.skipped_existing} дубль URL`
+                            : null,
+                          fetchResult.skipped_rejected > 0
+                            ? `${fetchResult.skipped_rejected} не статья`
                             : null,
                         ]
                           .filter(Boolean)

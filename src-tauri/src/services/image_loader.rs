@@ -1,4 +1,5 @@
 use crate::services::data_dir;
+use crate::services::rss_fetcher;
 use anyhow::{Context, Result};
 use reqwest::Client;
 use std::path::{Path, PathBuf};
@@ -33,12 +34,16 @@ pub async fn load_image_bytes(
         return std::fs::read(&path).with_context(|| format!("Read {}", path.display()));
     }
 
-    client
+    let mut request = client
         .get(image_ref)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 GamingNewsPublisher/0.1",
-        )
+        .header("User-Agent", rss_fetcher::user_agent())
+        .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+
+    if let Some(referer) = rss_fetcher::site_referer(image_ref) {
+        request = request.header("Referer", referer);
+    }
+
+    request
         .send()
         .await
         .context("Image download failed")?

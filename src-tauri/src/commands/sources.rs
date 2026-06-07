@@ -77,7 +77,14 @@ pub async fn preview_source(
         .map_err(|e| e.to_string())?;
 
     let mut preview = Vec::new();
-    for item in items {
+    for mut item in items {
+        item.description = crate::services::web_context::enrich_rss_description(
+            &state.http_client(),
+            &item.link,
+            &item.description,
+        )
+        .await;
+
         let image_url = image_processor::resolve_post_image(
             &state.http_client(),
             &data_dir,

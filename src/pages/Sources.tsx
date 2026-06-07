@@ -137,9 +137,10 @@ export function Sources() {
 
   const groupOrder = [
     "General Gaming News",
+    "Cybersport",
     "Industry & Business",
     "Leaks & Rumors",
-    "Hardware & Tech",
+    "Science",
   ];
 
   if (loading) {
@@ -220,7 +221,7 @@ export function Sources() {
                     <div className="space-y-2">
                       {presetGroups[group].map((p) => (
                         <label
-                          key={p.url}
+                          key={`${group}-${p.url}`}
                           className={`flex cursor-pointer items-center gap-3 rounded-md border p-3 transition-colors ${
                             existingUrls.has(p.url)
                               ? "border-success/30 bg-success/5 opacity-60"

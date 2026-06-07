@@ -66,6 +66,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         &settings,
         &vk_message,
         image_url,
+        Some(&post.source_url),
         app_data_dir.as_deref(),
     )
     .await
@@ -108,10 +109,16 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
     if vk_success || tg_success {
         post.status = "published".to_string();
         post.published_at = Some(Utc::now().to_rfc3339());
-        post.error_message = None;
+        if vk_success && tg_success {
+            post.error_message = None;
+        } else if !vk_success {
+            post.error_message = Some(format!("VK: {vk_message_result}"));
+        } else {
+            post.error_message = Some(format!("Telegram: {tg_message_result}"));
+        }
     } else {
         post.status = "failed".to_string();
-        post.error_message = Some(format!("VK: {}; TG: {}", vk_message_result, tg_message_result));
+        post.error_message = Some(format!("VK: {vk_message_result}; TG: {tg_message_result}"));
     }
 
     state.db.update_post(&post)?;
