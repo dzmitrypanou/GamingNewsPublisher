@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Loader2, Save, TestTube, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { FileUp, Link2, Loader2, Save, TestTube, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -14,9 +14,12 @@ import {
   testTelegram,
   testDeepseek,
   testProxy,
+  pickProxyFile,
+  fetchProxyList,
 } from "@/lib/tauri";
 import { dialog } from "@/lib/dialog";
 import type { AppSettings, ApiTestResult } from "@/lib/types";
+import { cn, countProxyLines, mergeProxyLists } from "@/lib/utils";
 
 const DEFAULT_PROMPT = `Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
 Все поля ответа строго на {language}.
@@ -60,6 +63,10 @@ export function Settings() {
   const [testing, setTesting] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [proxyUrl, setProxyUrl] = useState("");
+  const [proxyImporting, setProxyImporting] = useState<"file" | "url" | null>(null);
+
+  const proxyCount = useMemo(() => countProxyLines(settings.proxy_list), [settings.proxy_list]);
 
   useEffect(() => {
     getSettings()
@@ -121,6 +128,55 @@ export function Settings() {
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleImportProxyFile = async () => {
+    setProxyImporting("file");
+    try {
+      const content = await pickProxyFile();
+      update("proxy_list", mergeProxyLists(settings.proxy_list, content));
+    } catch (e) {
+      const message = String(e);
+      if (!message.includes("не выбран")) {
+        await dialog.alert(message, { title: "Ошибка импорта", variant: "error" });
+      }
+    } finally {
+      setProxyImporting(null);
+    }
+  };
+
+  const handleImportProxyUrl = async () => {
+    if (!proxyUrl.trim()) {
+      await dialog.alert("Вставьте ссылку на файл со списком прокси", {
+        title: "Нет ссылки",
+        variant: "info",
+      });
+      return;
+    }
+    setProxyImporting("url");
+    try {
+      const content = await fetchProxyList(proxyUrl.trim());
+      update("proxy_list", mergeProxyLists(settings.proxy_list, content));
+      setProxyUrl("");
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка загрузки", variant: "error" });
+    } finally {
+      setProxyImporting(null);
+    }
+  };
+
+  const handleClearProxyList = async () => {
+    if (!settings.proxy_list.trim()) return;
+    if (
+      !(await dialog.confirm("Очистить весь список прокси?", {
+        title: "Очистить список",
+        confirmText: "Очистить",
+        destructive: true,
+      }))
+    ) {
+      return;
+    }
+    update("proxy_list", "");
   };
 
   const handleTest = async (platform: "vk" | "telegram" | "deepseek" | "proxy") => {
@@ -318,35 +374,112 @@ export function Settings() {
               <>
                 <div className="space-y-2">
                   <Label>Тип прокси</Label>
-                  <select
-                    value={settings.proxy_type}
-                    onChange={(e) =>
-                      update("proxy_type", e.target.value as AppSettings["proxy_type"])
-                    }
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                  >
-                    <option value="http">HTTP</option>
-                    <option value="https">HTTPS</option>
-                    <option value="socks5">SOCKS5</option>
-                  </select>
+                  <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-secondary/20 p-1">
+                    {(
+                      [
+                        ["http", "HTTP"],
+                        ["https", "HTTPS"],
+                        ["socks5", "SOCKS5"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => update("proxy_type", value)}
+                        className={cn(
+                          "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                          settings.proxy_type === value
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                   <p className="text-xs text-muted-foreground">
-                    Применяется к строкам без явной схемы (http://, socks5://)
+                    Для строк без схемы (http://, socks5://) используется выбранный тип
                   </p>
                 </div>
-                <div className="space-y-2">
-                  <Label>Список прокси</Label>
+
+                <div className="space-y-3 rounded-lg border border-border bg-secondary/10 p-4">
+                  <Label>Импорт списка</Label>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      value={proxyUrl}
+                      onChange={(e) => setProxyUrl(e.target.value)}
+                      placeholder="https://example.com/proxies.txt"
+                      className="font-mono text-xs"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void handleImportProxyUrl();
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={proxyImporting !== null}
+                      onClick={() => void handleImportProxyUrl()}
+                    >
+                      {proxyImporting === "url" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Link2 className="h-4 w-4" />
+                      )}
+                      По ссылке
+                    </Button>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    disabled={proxyImporting !== null}
+                    onClick={() => void handleImportProxyFile()}
+                  >
+                    {proxyImporting === "file" ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <FileUp className="h-4 w-4" />
+                    )}
+                    Выбрать файл .txt
+                  </Button>
+                </div>
+
+                <div className="overflow-hidden rounded-lg border border-border">
+                  <div className="flex items-center justify-between gap-3 border-b border-border bg-secondary/30 px-3 py-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">Список прокси</p>
+                      <p className="text-xs text-muted-foreground">
+                        {proxyCount > 0
+                          ? `Загружено: ${proxyCount}`
+                          : "Пусто — введите вручную или импортируйте"}
+                      </p>
+                    </div>
+                    {settings.proxy_list.trim() && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 shrink-0 text-xs text-muted-foreground"
+                        onClick={() => void handleClearProxyList()}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Очистить
+                      </Button>
+                    )}
+                  </div>
                   <Textarea
                     value={settings.proxy_list}
                     onChange={(e) => update("proxy_list", e.target.value)}
-                    rows={6}
-                    className="font-mono text-xs"
+                    rows={8}
+                    className="min-h-[180px] resize-y rounded-none border-0 bg-background font-mono text-xs leading-relaxed focus-visible:ring-0 focus-visible:ring-offset-0"
                     placeholder={`192.168.1.1:8080\n10.0.0.2:3128@user:pass\nuser:pass@10.0.0.3:3128\n10.0.0.4:1080:login:password\nsocks5://1.2.3.4:1080`}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Форматы: IP:PORT · IP:PORT@LOGIN:PASS · LOGIN:PASS@IP:PORT ·
-                    IP:PORT:LOGIN:PASS · http(s)://... · socks5://...
-                  </p>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Форматы: IP:PORT · IP:PORT@LOGIN:PASS · LOGIN:PASS@IP:PORT ·
+                  IP:PORT:LOGIN:PASS · http(s)://... · socks5://... · строки с # игнорируются
+                </p>
                 <TestButton
                   platform="proxy"
                   testing={testing}

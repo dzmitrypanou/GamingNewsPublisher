@@ -31,3 +31,24 @@ export function formatDuration(totalSeconds: number): string {
   const seconds = safe % 60;
   return `${minutes} мин ${seconds.toString().padStart(2, "0")} сек`;
 }
+
+export function countProxyLines(list: string): number {
+  return list
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#")).length;
+}
+
+export function mergeProxyLists(existing: string, incoming: string): string {
+  const seen = new Set<string>();
+  const lines: string[] = [];
+
+  for (const raw of `${existing}\n${incoming}`.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || seen.has(line)) continue;
+    seen.add(line);
+    lines.push(line);
+  }
+
+  return lines.join("\n");
+}

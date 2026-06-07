@@ -40,6 +40,14 @@ export async function testProxy(): Promise<ApiTestResult> {
   return invoke("test_proxy");
 }
 
+export async function pickProxyFile(): Promise<string> {
+  return invoke("pick_proxy_file");
+}
+
+export async function fetchProxyList(url: string): Promise<string> {
+  return invoke("fetch_proxy_list", { url });
+}
+
 export async function getCategories(): Promise<Category[]> {
   return invoke("get_categories");
 }
