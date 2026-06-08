@@ -4,12 +4,14 @@ import type {
   AppSettings,
   Category,
   AutomationStatus,
+  BackupExportResult,
   DashboardStats,
   FetchResult,
   Post,
   PresetSource,
   PublishLog,
   PublishResult,
+  RegenerateQueueImagesResult,
   DuplicatesOverview,
   UnpublishResult,
   RssPreviewItem,
@@ -187,6 +189,10 @@ export async function deletePost(id: number): Promise<void> {
   return invoke("delete_post", { id });
 }
 
+export async function reprocessPost(id: number): Promise<Post> {
+  return invoke("reprocess_post", { id });
+}
+
 export async function fetchNews(): Promise<FetchResult> {
   return invoke("fetch_news");
 }
@@ -215,8 +221,24 @@ export async function deleteQueuePosts(): Promise<number> {
   return invoke("delete_queue_posts");
 }
 
+export async function regenerateQueueImages(): Promise<RegenerateQueueImagesResult> {
+  return invoke("regenerate_queue_images");
+}
+
 export async function resetAllData(): Promise<void> {
   return invoke("reset_all_data");
+}
+
+export async function pickBackupDirectory(): Promise<string> {
+  return invoke("pick_backup_directory");
+}
+
+export async function exportBackupManual(): Promise<BackupExportResult> {
+  return invoke("export_backup_manual");
+}
+
+export async function importBackup(): Promise<void> {
+  return invoke("import_backup");
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {

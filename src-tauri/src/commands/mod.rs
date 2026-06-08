@@ -1,4 +1,5 @@
 mod ai;
+mod backup;
 mod categories;
 mod duplicates;
 mod images;
@@ -11,6 +12,7 @@ mod sources;
 mod watermark;
 
 pub use ai::*;
+pub use backup::*;
 pub use categories::*;
 pub use duplicates::*;
 pub use images::*;

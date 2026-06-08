@@ -1,4 +1,5 @@
 use crate::auto_publish_scheduler::AutoPublishConfig;
+use crate::backup_scheduler::BackupSchedulerConfig;
 use crate::scheduler::FetchConfig;
 use crate::models::{ApiTestResult, AppSettings};
 use crate::services::{deepseek, proxy, settings_store, telegram_api, vk_api};
@@ -21,6 +22,7 @@ pub fn save_settings(
         .map_err(|e| e.to_string())?;
     settings_store::save_settings(&state.app_handle, &settings).map_err(|e| e.to_string())?;
     state.update_fetch_scheduler(FetchConfig::from_settings(&settings));
+    state.update_backup_scheduler(BackupSchedulerConfig::from_settings(&settings));
     state.update_auto_publish_scheduler(AutoPublishConfig::from_settings(&settings));
 
     if settings.local_llm_needed() {

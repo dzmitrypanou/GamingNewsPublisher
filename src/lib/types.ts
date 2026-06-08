@@ -16,6 +16,9 @@ export interface AppSettings {
   ai_prompt_template: string;
   auto_fetch: boolean;
   fetch_interval_minutes: number;
+  fetch_schedule_start_at: string;
+  fetch_repeat_unit: FetchRepeatUnit;
+  fetch_repeat_every: number;
   fetch_items_per_source: number;
   fetch_sources_concurrency: number;
   fetch_items_concurrency: number;
@@ -47,6 +50,12 @@ export interface AppSettings {
   watermark_size_mode: WatermarkSizeMode;
   watermark_width_px: number;
   watermark_height_px: number;
+  watermark_backdrop: WatermarkBackdrop;
+  watermark_backdrop_opacity: number;
+  watermark_backdrop_padding: number;
+  watermark_backdrop_color: string;
+  watermark_backdrop_logo_x: number;
+  watermark_backdrop_logo_y: number;
   fetch_full_article_text: boolean;
   web_context_enabled: boolean;
   web_search_provider: "off" | "article_only" | "tavily";
@@ -54,6 +63,11 @@ export interface AppSettings {
   ai_duplicate_window_days: number;
   ai_duplicate_check_limit: number;
   ai_duplicate_llm_top_k: number;
+  backup_enabled: boolean;
+  backup_schedule_start_at: string;
+  backup_repeat_unit: FetchRepeatUnit;
+  backup_repeat_every: number;
+  backup_directory: string;
 }
 
 export type WatermarkSizeMode = "scale" | "custom";
@@ -70,6 +84,25 @@ export type WatermarkPreset =
   | "bottom_left"
   | "bottom_center"
   | "bottom_right";
+
+export type FetchRepeatUnit = "minutes" | "hours" | "days";
+
+export type WatermarkBackdrop =
+  | "none"
+  | "dark_rect"
+  | "dark_pill"
+  | "shadow"
+  | "dark_glow"
+  | "bottom_bar"
+  | "top_bar"
+  | "bottom_gradient"
+  | "top_gradient"
+  | "left_strip"
+  | "right_strip"
+  | "vignette"
+  | "corner_fade";
+
+export type WatermarkPreviewBackground = "checker" | "white" | "light" | "photo";
 
 export interface Category {
   id: number;
@@ -115,6 +148,14 @@ export type PostStatus =
   | "published"
   | "failed";
 
+export interface RegenerateQueueImagesResult {
+  total: number;
+  updated: number;
+  failed: number;
+  skipped: number;
+  errors: string[];
+}
+
 export interface PublishLog {
   id: number;
   post_id: number;
@@ -151,6 +192,11 @@ export interface AutomationStatus {
   fetch_running: boolean;
   auto_fetch_enabled: boolean;
   fetch_interval_minutes: number;
+  fetch_schedule_start_at: string;
+  fetch_repeat_unit: FetchRepeatUnit;
+  fetch_repeat_every: number;
+  next_fetch_at: string | null;
+  fetch_scheduled_delay_seconds: number;
   last_fetch_at: string | null;
   last_fetch_new_posts: number;
   last_fetch_scanned_items: number;
@@ -175,6 +221,19 @@ export interface AutomationStatus {
   ai_duplicate_check_enabled: boolean;
   fetch_dedup_checked: number;
   fetch_dedup_total: number;
+  backup_enabled: boolean;
+  backup_schedule_start_at: string;
+  backup_repeat_unit: FetchRepeatUnit;
+  backup_repeat_every: number;
+  backup_directory: string;
+  last_backup_at: string | null;
+  next_backup_at: string | null;
+  backup_scheduled_delay_seconds: number;
+}
+
+export interface BackupExportResult {
+  path: string;
+  size_bytes: number;
 }
 
 export interface LocalModelInfo {

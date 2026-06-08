@@ -1,6 +1,6 @@
 use crate::models::{FetchResult, Source};
 use crate::services::rss_fetcher::{self, RssItem};
-use crate::services::{ai, data_dir, dedup_pipeline, image_processor, settings_store};
+use crate::services::{ai, content_filter, data_dir, dedup_pipeline, image_processor, settings_store};
 use crate::AppState;
 use anyhow::Result;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -117,6 +117,8 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
     let image_options = image_processor::PostImageOptions::from_settings(&settings);
     let counters = Arc::new(FetchCounters::new());
     state.fetch_runtime.set_active_counters(counters.clone());
+
+    purge_puzzle_hints_from_queue(&state);
 
     if ai_duplicate_enabled && settings.duplicate_uses_local() {
         if let Err(e) = state.local_llm.ensure_running(&settings).await {
@@ -416,6 +418,30 @@ async fn process_item(
         }
         Err(e) => {
             counters.push_error(format!("DB {}: {}", source.name, e));
+        }
+    }
+}
+
+fn post_matches_puzzle_hints_filter(post: &crate::models::Post) -> bool {
+    if content_filter::is_hints_or_puzzle_answer_content(&post.raw_title, &post.source_url) {
+        return true;
+    }
+    if let Some(ai_title) = post.ai_title.as_deref() {
+        return content_filter::is_hints_or_puzzle_answer_content(ai_title, &post.source_url);
+    }
+    false
+}
+
+pub(crate) fn purge_puzzle_hints_from_queue(state: &AppState) {
+    let Ok(posts) = state.db.get_posts(None) else {
+        return;
+    };
+    for post in posts {
+        if post.status == "published" {
+            continue;
+        }
+        if post_matches_puzzle_hints_filter(&post) {
+        let _ = state.db.forget_post(post.id);
         }
     }
 }

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Loader2, RefreshCw, Trash2, Trash } from "lucide-react";
+import { ImageIcon, Loader2, RefreshCw, Trash2, Trash } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PostImage } from "@/components/posts/PostImage";
 import { StatusBadge } from "@/components/posts/StatusBadge";
-import { getPosts, deletePost, deleteQueuePosts } from "@/lib/tauri";
+import { getPosts, deletePost, deleteQueuePosts, regenerateQueueImages } from "@/lib/tauri";
 import type { Post, PostStatus } from "@/lib/types";
 import { dialog } from "@/lib/dialog";
 import { formatDate, truncate } from "@/lib/utils";
@@ -23,6 +23,7 @@ export function Posts() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingAll, setDeletingAll] = useState(false);
+  const [regeneratingImages, setRegeneratingImages] = useState(false);
   const [filter, setFilter] = useState<PostStatus | "all">("all");
 
   const load = async () => {
@@ -43,11 +44,14 @@ export function Posts() {
 
   const handleDelete = async (id: number) => {
     if (
-      !(await dialog.confirm("Пост будет удалён без возможности восстановления.", {
-        title: "Удалить пост?",
-        confirmText: "Удалить",
-        destructive: true,
-      }))
+      !(await dialog.confirm(
+        "Пост будет удалён из базы вместе с историей URL. При следующем сборе RSS эта новость может появиться снова и пройти фильтры заново.",
+        {
+          title: "Удалить и забыть?",
+          confirmText: "Удалить",
+          destructive: true,
+        }
+      ))
     ) {
       return;
     }
@@ -55,10 +59,47 @@ export function Posts() {
     await load();
   };
 
+  const handleRegenerateImages = async () => {
+    if (
+      !(await dialog.confirm(
+        "Все посты в очереди будут заново обработаны: изображения скачаются с источника и применятся текущие настройки (размер кадра, водяной знак, подложка). Опубликованные посты не затрагиваются.",
+        {
+          title: "Перегенерировать изображения?",
+          confirmText: "Перегенерировать",
+        }
+      ))
+    ) {
+      return;
+    }
+
+    setRegeneratingImages(true);
+    try {
+      const result = await regenerateQueueImages();
+      const lines = [
+        `Всего в очереди: ${result.total}`,
+        `Обновлено: ${result.updated}`,
+        `Без изменений: ${result.skipped}`,
+        `Ошибок: ${result.failed}`,
+      ];
+      if (result.errors.length > 0) {
+        lines.push("", ...result.errors.slice(0, 5));
+      }
+      await dialog.alert(lines.join("\n"), {
+        title: result.failed > 0 ? "Готово с ошибками" : "Готово",
+        variant: result.failed > 0 ? "info" : "success",
+      });
+      await load();
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
+    } finally {
+      setRegeneratingImages(false);
+    }
+  };
+
   const handleDeleteAll = async () => {
     if (
       !(await dialog.confirm(
-        "Будут удалены все посты из очереди (новые, AI, одобренные, ошибки). Опубликованные посты не затрагиваются.",
+        "Будут удалены все посты из очереди (новые, AI, одобренные, ошибки) вместе с историей URL. Опубликованные посты не затрагиваются.",
         {
           title: "Удалить всю очередь?",
           confirmText: "Удалить всё",
@@ -95,9 +136,21 @@ export function Posts() {
         <div className="flex gap-2">
           <Button
             variant="outline"
+            onClick={handleRegenerateImages}
+            disabled={regeneratingImages || deletingAll}
+          >
+            {regeneratingImages ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ImageIcon className="h-4 w-4" />
+            )}
+            Перегенерировать изображения
+          </Button>
+          <Button
+            variant="outline"
             className="text-destructive hover:text-destructive"
             onClick={handleDeleteAll}
-            disabled={deletingAll}
+            disabled={deletingAll || regeneratingImages}
           >
             {deletingAll ? (
               <Loader2 className="h-4 w-4 animate-spin" />

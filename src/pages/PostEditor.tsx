@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Loader2, Sparkles, Send, Undo2, RefreshCw } from "lucide-react";
+import { ArrowLeft, Loader2, Sparkles, Send, Undo2, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PostImage } from "@/components/posts/PostImage";
 import { PostPreview } from "@/components/posts/PostPreview";
 import { StatusBadge } from "@/components/posts/StatusBadge";
-import { getPost, updatePost, processPostWithAi, publishPost, unpublishPost, refreshPostSource } from "@/lib/tauri";
+import { getPost, updatePost, processPostWithAi, publishPost, unpublishPost, refreshPostSource, reprocessPost, deletePost } from "@/lib/tauri";
 import { dialog } from "@/lib/dialog";
 import type { Post, PublishResult, UnpublishResult } from "@/lib/types";
 
@@ -22,6 +22,8 @@ export function PostEditor() {
   const [publishing, setPublishing] = useState(false);
   const [unpublishing, setUnpublishing] = useState(false);
   const [refreshingSource, setRefreshingSource] = useState(false);
+  const [reprocessing, setReprocessing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishResult | null>(null);
   const [unpublishResult, setUnpublishResult] = useState<UnpublishResult | null>(null);
 
@@ -117,6 +119,67 @@ export function PostEditor() {
     }
   };
 
+  const handleReprocess = async () => {
+    if (!post) return;
+    if (
+      !(await dialog.confirm(
+        "Статья будет заново загружена с сайта, проверена фильтрами и обработана AI. Если не подходит — пост удалится из базы.",
+        {
+          title: "Перезагрузить пост?",
+          confirmText: "Перезагрузить",
+        }
+      ))
+    ) {
+      return;
+    }
+    setReprocessing(true);
+    try {
+      const updated = await reprocessPost(post.id);
+      setPost(updated);
+      setTitle(updated.ai_title || updated.raw_title);
+      setText(updated.ai_text || updated.raw_description);
+      setHashtags(updated.ai_hashtags || "");
+      setPublishResult(null);
+      setUnpublishResult(null);
+    } catch (e) {
+      const message = String(e);
+      await dialog.alert(message, {
+        title: message.includes("фильтр") ? "Пост отфильтрован" : "Ошибка",
+        variant: message.includes("фильтр") ? "info" : "error",
+      });
+      if (message.includes("фильтр") || message.includes("не найден")) {
+        navigate("/posts");
+      }
+    } finally {
+      setReprocessing(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!post) return;
+    if (
+      !(await dialog.confirm(
+        "Пост будет удалён из базы вместе с историей URL. При следующем сборе RSS эта новость может появиться снова.",
+        {
+          title: "Удалить и забыть?",
+          confirmText: "Удалить",
+          destructive: true,
+        }
+      ))
+    ) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deletePost(post.id);
+      navigate("/posts");
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handlePublish = async () => {
     if (!post) return;
     setPublishing(true);
@@ -157,6 +220,21 @@ export function PostEditor() {
           <p className="text-sm text-muted-foreground truncate">{post.source_url}</p>
         </div>
         <StatusBadge status={post.status} />
+        {post.status !== "published" && (
+          <Button
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            onClick={handleDelete}
+            disabled={deleting}
+          >
+            {deleting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+            Удалить
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-6">
@@ -202,6 +280,16 @@ export function PostEditor() {
               )}
 
               <div className="flex flex-wrap gap-2">
+                {post.status !== "published" && (
+                  <Button variant="outline" onClick={handleReprocess} disabled={reprocessing}>
+                    {reprocessing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    Перезагрузить
+                  </Button>
+                )}
                 <Button variant="outline" onClick={handleAi} disabled={aiLoading}>
                   {aiLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

@@ -19,9 +19,28 @@ fn resolve_active_model_id(model_id: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+fn normalize_backdrop_logo_offset(raw: u32, padding: u32) -> u32 {
+    let slack = padding.saturating_mul(2);
+    if slack == 0 {
+        return 0;
+    }
+    let value = if raw <= 100 && raw % 50 == 0 {
+        ((slack as u64 * raw as u64) / 100) as u32
+    } else {
+        raw
+    };
+    value.min(slack)
+}
+
 pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
     let data_dir = data_dir::resolve(app)?;
     let store = app.store(data_dir::settings_path(&data_dir))?;
+    let watermark_backdrop_padding = store
+        .get("watermark_backdrop_padding")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(14)
+        .clamp(0, 80);
     let settings = AppSettings {
         vk_token: store
             .get("vk_token")
@@ -111,6 +130,26 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("fetch_interval_minutes")
             .and_then(|v| v.as_u64())
             .unwrap_or(30) as u32,
+        fetch_schedule_start_at: store
+            .get("fetch_schedule_start_at")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        fetch_repeat_unit: store
+            .get("fetch_repeat_unit")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "minutes".to_string()),
+        fetch_repeat_every: store
+            .get("fetch_repeat_every")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or_else(|| {
+                store
+                    .get("fetch_interval_minutes")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u32)
+                    .unwrap_or(30)
+            })
+            .max(1),
         fetch_items_per_source: store
             .get("fetch_items_per_source")
             .and_then(|v| v.as_u64())
@@ -265,6 +304,37 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .and_then(|v| v.as_u64())
             .map(|v| v as u32)
             .unwrap_or(0),
+        watermark_backdrop: store
+            .get("watermark_backdrop")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "none".to_string()),
+        watermark_backdrop_opacity: store
+            .get("watermark_backdrop_opacity")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(65)
+            .clamp(0, 100),
+        watermark_backdrop_padding,
+        watermark_backdrop_color: store
+            .get("watermark_backdrop_color")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "#000000".to_string()),
+        watermark_backdrop_logo_x: normalize_backdrop_logo_offset(
+            store
+                .get("watermark_backdrop_logo_x")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(watermark_backdrop_padding),
+            watermark_backdrop_padding,
+        ),
+        watermark_backdrop_logo_y: normalize_backdrop_logo_offset(
+            store
+                .get("watermark_backdrop_logo_y")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or(watermark_backdrop_padding),
+            watermark_backdrop_padding,
+        ),
         fetch_full_article_text: store
             .get("fetch_full_article_text")
             .and_then(|v| v.as_bool())
@@ -298,6 +368,35 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .map(|v| v as u32)
             .unwrap_or(20)
             .clamp(1, 100),
+        backup_enabled: store
+            .get("backup_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        backup_schedule_start_at: store
+            .get("backup_schedule_start_at")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        backup_repeat_unit: store
+            .get("backup_repeat_unit")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_else(|| "days".to_string()),
+        backup_repeat_every: store
+            .get("backup_repeat_every")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(1)
+            .max(1),
+        backup_directory: {
+            let raw = store
+                .get("backup_directory")
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| "backup".to_string());
+            if raw.trim().is_empty() {
+                "backup".to_string()
+            } else {
+                raw
+            }
+        },
     };
     let loaded_id = settings.local_model_id.clone();
     let resolved_id = resolve_active_model_id(&loaded_id);
@@ -365,7 +464,16 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     store.set("auto_fetch", serde_json::json!(settings.auto_fetch));
     store.set(
         "fetch_interval_minutes",
-        serde_json::json!(settings.fetch_interval_minutes),
+        serde_json::json!(settings.fetch_interval_minutes.max(1)),
+    );
+    store.set(
+        "fetch_schedule_start_at",
+        serde_json::json!(settings.fetch_schedule_start_at),
+    );
+    store.set("fetch_repeat_unit", serde_json::json!(settings.fetch_repeat_unit));
+    store.set(
+        "fetch_repeat_every",
+        serde_json::json!(settings.fetch_repeat_every.max(1)),
     );
     store.set(
         "fetch_items_per_source",
@@ -449,6 +557,28 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
         "watermark_height_px",
         serde_json::json!(settings.watermark_height_px),
     );
+    store.set("watermark_backdrop", serde_json::json!(settings.watermark_backdrop));
+    store.set(
+        "watermark_backdrop_opacity",
+        serde_json::json!(settings.watermark_backdrop_opacity.clamp(0, 100)),
+    );
+    store.set(
+        "watermark_backdrop_padding",
+        serde_json::json!(settings.watermark_backdrop_padding.clamp(0, 80)),
+    );
+    store.set(
+        "watermark_backdrop_color",
+        serde_json::json!(settings.watermark_backdrop_color),
+    );
+    let backdrop_logo_max = settings.watermark_backdrop_padding.saturating_mul(2);
+    store.set(
+        "watermark_backdrop_logo_x",
+        serde_json::json!(settings.watermark_backdrop_logo_x.clamp(0, backdrop_logo_max)),
+    );
+    store.set(
+        "watermark_backdrop_logo_y",
+        serde_json::json!(settings.watermark_backdrop_logo_y.clamp(0, backdrop_logo_max)),
+    );
     store.set(
         "fetch_full_article_text",
         serde_json::json!(settings.fetch_full_article_text),
@@ -474,6 +604,17 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
         "ai_duplicate_llm_top_k",
         serde_json::json!(settings.ai_duplicate_llm_top_k.clamp(1, 100)),
     );
+    store.set("backup_enabled", serde_json::json!(settings.backup_enabled));
+    store.set(
+        "backup_schedule_start_at",
+        serde_json::json!(settings.backup_schedule_start_at),
+    );
+    store.set("backup_repeat_unit", serde_json::json!(settings.backup_repeat_unit));
+    store.set(
+        "backup_repeat_every",
+        serde_json::json!(settings.backup_repeat_every.max(1)),
+    );
+    store.set("backup_directory", serde_json::json!(settings.backup_directory));
     store.save()?;
     Ok(())
 }

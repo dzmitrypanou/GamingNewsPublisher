@@ -569,6 +569,34 @@ impl Database {
         Ok(())
     }
 
+    pub fn checkpoint_wal(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute_batch("PRAGMA wal_checkpoint(FULL);")?;
+        Ok(())
+    }
+
+    pub fn get_last_backup_at(&self) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM app_meta WHERE key = 'last_backup_at'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(Into::into)
+    }
+
+    pub fn set_last_backup_at(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO app_meta (key, value) VALUES ('last_backup_at', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![now],
+        )?;
+        Ok(())
+    }
+
     pub fn get_duplicates_overview(&self) -> Result<DuplicatesOverview> {
         let kept_posts = self.get_posts(None)?;
         let kept_count = kept_posts.len() as i64;
@@ -929,7 +957,81 @@ impl Database {
         Ok(())
     }
 
+    pub fn forget_source_url(&self, source_url: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let norm_url = duplicate::normalize_url(source_url);
+        conn.execute(
+            "DELETE FROM parsed_items WHERE normalized_url = ?1 OR source_url = ?2",
+            params![norm_url, source_url],
+        )?;
+        conn.execute(
+            "DELETE FROM duplicate_records WHERE duplicate_url = ?1",
+            params![source_url],
+        )?;
+        Ok(())
+    }
+
+    pub fn forget_post(&self, id: i64) -> Result<()> {
+        let source_url: String = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT source_url FROM posts WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .context("Post not found")?
+        };
+        self.delete_post(id)?;
+        self.forget_source_url(&source_url)
+    }
+
+    pub fn reset_post_raw(&self, id: i64, raw_title: &str, raw_description: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let norm_title = duplicate::normalize_title(raw_title);
+        conn.execute(
+            "UPDATE posts SET raw_title=?1, raw_description=?2, normalized_title=?3,
+             ai_title=NULL, ai_text=NULL, ai_hashtags=NULL, error_message=NULL,
+             vk_post_id=NULL, telegram_message_id=NULL, published_at=NULL, status='new'
+             WHERE id=?4",
+            params![raw_title, raw_description, norm_title, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_queue_posts(&self) -> Result<Vec<Post>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT p.id, p.source_url, p.raw_title, p.raw_description, p.raw_image_url,
+                    p.ai_title, p.ai_text, p.ai_hashtags, p.category_id, c.name,
+                    p.status, p.vk_post_id, p.telegram_message_id, p.created_at,
+                    p.published_at, p.error_message
+             FROM posts p LEFT JOIN categories c ON p.category_id = c.id
+             WHERE p.status IN ('new', 'processing', 'ai_processed', 'approved', 'failed')
+             ORDER BY p.created_at ASC",
+        )?;
+        let rows = stmt.query_map([], Self::map_post_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn update_post_image_url(&self, id: i64, image_url: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE posts SET raw_image_url = ?1 WHERE id = ?2",
+            params![image_url, id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_queue_posts(&self) -> Result<i64> {
+        let urls: Vec<String> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT source_url FROM posts WHERE status IN ('new', 'processing', 'ai_processed', 'approved', 'failed')",
+            )?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.filter_map(Result::ok).collect()
+        };
+
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "DELETE FROM publish_log WHERE post_id IN (
@@ -941,6 +1043,12 @@ impl Database {
             "DELETE FROM posts WHERE status IN ('new', 'processing', 'ai_processed', 'approved', 'failed')",
             [],
         )?;
+        drop(conn);
+
+        for url in urls {
+            let _ = self.forget_source_url(&url);
+        }
+
         Ok(deleted as i64)
     }
 

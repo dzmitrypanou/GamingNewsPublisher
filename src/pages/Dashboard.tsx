@@ -167,6 +167,22 @@ export function Dashboard() {
     automation?.auto_publish_enabled ? automation.next_publish_at : null
   );
 
+  const secondsUntilFetch = useCountdown(
+    automation?.auto_fetch_enabled ? automation.next_fetch_at : null
+  );
+
+  const fetchRepeatLabel = !automation?.auto_fetch_enabled
+    ? "Выкл"
+    : automation.fetch_repeat_unit === "days"
+      ? automation.fetch_repeat_every === 1
+        ? "Каждый день"
+        : `Каждые ${automation.fetch_repeat_every} дн.`
+      : automation.fetch_repeat_unit === "hours"
+        ? automation.fetch_repeat_every === 1
+          ? "Каждый час."
+          : `Каждые ${automation.fetch_repeat_every} ч.`
+        : `Каждые ${automation.fetch_repeat_every} мин.`;
+
   const fetchActive = (stats?.sources_active ?? 0) > 0;
   const fetchStatusLabel = !automation?.auto_fetch_enabled
     ? "Выкл"
@@ -341,7 +357,12 @@ export function Dashboard() {
                     <CardDescription className="mt-1">
                       {automation?.last_fetch_at
                         ? `Последний сбор · ${formatDate(automation.last_fetch_at)}`
-                        : "Ожидание первого сбора"}
+                        : automation?.auto_fetch_enabled &&
+                            automation.fetch_schedule_start_at &&
+                            secondsUntilFetch != null &&
+                            secondsUntilFetch > 60
+                          ? `Первый сбор · ${formatDate(automation.next_fetch_at ?? automation.fetch_schedule_start_at)}`
+                          : "Ожидание первого сбора"}
                     </CardDescription>
                   </div>
                   <span
@@ -366,11 +387,14 @@ export function Dashboard() {
                 <div className="grid grid-cols-2 gap-3">
                   <MetricTile
                     icon={Clock}
-                    label="Интервал сбора"
-                    value={
-                      automation?.auto_fetch_enabled
-                        ? `${automation?.fetch_interval_minutes ?? 30} мин`
-                        : "Выкл"
+                    label="Расписание"
+                    value={fetchRepeatLabel}
+                    hint={
+                      automation?.auto_fetch_enabled && automation.fetch_schedule_start_at
+                        ? `С ${automation.fetch_schedule_start_at.replace("T", " ")}`
+                        : automation?.auto_fetch_enabled && secondsUntilFetch != null
+                          ? `Следующий через ${formatDuration(secondsUntilFetch)}`
+                          : undefined
                     }
                   />
                   <MetricTile

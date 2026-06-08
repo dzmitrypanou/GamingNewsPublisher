@@ -31,6 +31,32 @@ pub fn watermark_dir(data_dir: &Path) -> PathBuf {
     dir
 }
 
+pub fn app_root(app: &AppHandle) -> Result<PathBuf> {
+    let data_dir = resolve(app)?;
+    data_dir
+        .parent()
+        .context("Application root not found")
+        .map(|path| path.to_path_buf())
+}
+
+pub fn resolve_backup_directory(app: &AppHandle, configured: &str) -> Result<PathBuf> {
+    let trimmed = configured.trim();
+    let relative = if trimmed.is_empty() {
+        "backup"
+    } else {
+        trimmed
+    };
+
+    let path = Path::new(relative);
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    let root = app_root(app)?;
+    let relative = relative.trim_start_matches(['/', '\\']);
+    Ok(root.join(relative))
+}
+
 fn exe_data_dir() -> Result<PathBuf> {
     let data_dir = std::env::current_exe()
         .context("Failed to get executable path")?

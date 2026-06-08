@@ -20,6 +20,9 @@ pub struct AppSettings {
     pub ai_prompt_template: String,
     pub auto_fetch: bool,
     pub fetch_interval_minutes: u32,
+    pub fetch_schedule_start_at: String,
+    pub fetch_repeat_unit: String,
+    pub fetch_repeat_every: u32,
     pub fetch_items_per_source: u32,
     pub fetch_sources_concurrency: u32,
     pub fetch_items_concurrency: u32,
@@ -51,6 +54,12 @@ pub struct AppSettings {
     pub watermark_size_mode: String,
     pub watermark_width_px: u32,
     pub watermark_height_px: u32,
+    pub watermark_backdrop: String,
+    pub watermark_backdrop_opacity: u32,
+    pub watermark_backdrop_padding: u32,
+    pub watermark_backdrop_color: String,
+    pub watermark_backdrop_logo_x: u32,
+    pub watermark_backdrop_logo_y: u32,
     pub fetch_full_article_text: bool,
     pub web_context_enabled: bool,
     pub web_search_provider: String,
@@ -58,6 +67,11 @@ pub struct AppSettings {
     pub ai_duplicate_window_days: u32,
     pub ai_duplicate_check_limit: u32,
     pub ai_duplicate_llm_top_k: u32,
+    pub backup_enabled: bool,
+    pub backup_schedule_start_at: String,
+    pub backup_repeat_unit: String,
+    pub backup_repeat_every: u32,
+    pub backup_directory: String,
 }
 
 impl Default for AppSettings {
@@ -80,6 +94,9 @@ impl Default for AppSettings {
             ai_prompt_template: DEFAULT_PROMPT.to_string(),
             auto_fetch: true,
             fetch_interval_minutes: 30,
+            fetch_schedule_start_at: String::new(),
+            fetch_repeat_unit: "minutes".to_string(),
+            fetch_repeat_every: 30,
             fetch_items_per_source: 10,
             fetch_sources_concurrency: 6,
             fetch_items_concurrency: 4,
@@ -111,6 +128,12 @@ impl Default for AppSettings {
             watermark_size_mode: "scale".to_string(),
             watermark_width_px: 0,
             watermark_height_px: 0,
+            watermark_backdrop: "none".to_string(),
+            watermark_backdrop_opacity: 65,
+            watermark_backdrop_padding: 14,
+            watermark_backdrop_color: "#000000".to_string(),
+            watermark_backdrop_logo_x: 14,
+            watermark_backdrop_logo_y: 14,
             fetch_full_article_text: true,
             web_context_enabled: true,
             web_search_provider: "article_only".to_string(),
@@ -118,6 +141,11 @@ impl Default for AppSettings {
             ai_duplicate_window_days: 30,
             ai_duplicate_check_limit: 200,
             ai_duplicate_llm_top_k: 50,
+            backup_enabled: false,
+            backup_schedule_start_at: String::new(),
+            backup_repeat_unit: "days".to_string(),
+            backup_repeat_every: 1,
+            backup_directory: "backup".to_string(),
         }
     }
 }
@@ -287,6 +315,11 @@ pub struct AutomationStatus {
     pub fetch_running: bool,
     pub auto_fetch_enabled: bool,
     pub fetch_interval_minutes: u32,
+    pub fetch_schedule_start_at: String,
+    pub fetch_repeat_unit: String,
+    pub fetch_repeat_every: u32,
+    pub next_fetch_at: Option<String>,
+    pub fetch_scheduled_delay_seconds: u64,
     pub last_fetch_at: Option<String>,
     pub last_fetch_new_posts: i64,
     pub last_fetch_scanned_items: i64,
@@ -311,6 +344,20 @@ pub struct AutomationStatus {
     pub ai_duplicate_check_enabled: bool,
     pub fetch_dedup_checked: i64,
     pub fetch_dedup_total: i64,
+    pub backup_enabled: bool,
+    pub backup_schedule_start_at: String,
+    pub backup_repeat_unit: String,
+    pub backup_repeat_every: u32,
+    pub backup_directory: String,
+    pub last_backup_at: Option<String>,
+    pub next_backup_at: Option<String>,
+    pub backup_scheduled_delay_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupExportResult {
+    pub path: String,
+    pub size_bytes: u64,
 }
 
 impl QueuePostPreview {
@@ -420,6 +467,15 @@ pub struct UnpublishResult {
     pub vk_message: String,
     pub telegram_success: bool,
     pub telegram_message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegenerateQueueImagesResult {
+    pub total: u32,
+    pub updated: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

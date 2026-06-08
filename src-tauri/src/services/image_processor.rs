@@ -116,6 +116,36 @@ pub fn is_ign_source(source_url: &str, article_url: &str, image_url: Option<&str
 
 }
 
+pub fn remote_image_hint(current: Option<&str>) -> Option<&str> {
+    current.filter(|url| url.starts_with("http://") || url.starts_with("https://"))
+}
+
+pub fn guess_feed_source_url(
+    sources: &[crate::models::Source],
+    article_url: &str,
+    category_id: Option<i64>,
+) -> String {
+    if let Some(cid) = category_id {
+        if let Some(source) = sources.iter().find(|s| s.category_id == Some(cid)) {
+            return source.url.clone();
+        }
+    }
+
+    let article = article_url.to_ascii_lowercase();
+    if let Some(source) = sources.iter().find(|s| {
+        s.url
+            .to_ascii_lowercase()
+            .split('/')
+            .nth(2)
+            .map(|host| !host.is_empty() && article.contains(host))
+            .unwrap_or(false)
+    }) {
+        return source.url.clone();
+    }
+
+    String::new()
+}
+
 pub async fn resolve_post_image(
 
     client: &Client,

@@ -1,10 +1,14 @@
 mod ai_worker;
 mod auto_publish_runtime;
 mod auto_publish_scheduler;
+mod backup_scheduler;
+mod backup_scheduler_runtime;
 mod commands;
 mod db;
 mod fetch;
 mod fetch_runtime;
+mod fetch_schedule;
+mod fetch_scheduler_runtime;
 mod local_embed_runtime;
 mod local_llm_runtime;
 mod models;
@@ -15,8 +19,11 @@ mod services;
 use ai_worker::{start_ai_worker, AiWorkerRuntime};
 use auto_publish_runtime::AutoPublishRuntime;
 use auto_publish_scheduler::{AutoPublishConfig, AutoPublishSchedulerHandle};
+use backup_scheduler::{BackupSchedulerConfig, BackupSchedulerHandle};
+use backup_scheduler_runtime::BackupSchedulerRuntime;
 use db::Database;
 use fetch_runtime::FetchRuntime;
+use fetch_scheduler_runtime::FetchSchedulerRuntime;
 use local_embed_runtime::LocalEmbedRuntime;
 use local_llm_runtime::LocalLlmRuntime;
 use scheduler::{FetchConfig, SchedulerHandle};
@@ -31,11 +38,14 @@ pub struct AppState {
     pub db: Database,
     http_pool: Mutex<HttpClientPool>,
     pub fetch_runtime: FetchRuntime,
+    pub fetch_scheduler_runtime: Arc<FetchSchedulerRuntime>,
+    pub backup_scheduler_runtime: Arc<BackupSchedulerRuntime>,
     pub auto_publish_runtime: Arc<AutoPublishRuntime>,
     pub ai_worker: Arc<AiWorkerRuntime>,
     pub local_llm: Arc<LocalLlmRuntime>,
     pub local_embed: Arc<LocalEmbedRuntime>,
     scheduler: Mutex<Option<SchedulerHandle>>,
+    backup_scheduler: Mutex<Option<BackupSchedulerHandle>>,
     auto_publish_scheduler: Mutex<Option<AutoPublishSchedulerHandle>>,
 }
 
@@ -53,6 +63,14 @@ impl AppState {
 
     pub fn update_fetch_scheduler(&self, config: FetchConfig) {
         if let Ok(guard) = self.scheduler.lock() {
+            if let Some(handle) = guard.as_ref() {
+                handle.update(config);
+            }
+        }
+    }
+
+    pub fn update_backup_scheduler(&self, config: BackupSchedulerConfig) {
+        if let Ok(guard) = self.backup_scheduler.lock() {
             if let Some(handle) = guard.as_ref() {
                 handle.update(config);
             }
@@ -99,6 +117,8 @@ pub fn run() {
             });
 
             let publish_runtime = Arc::new(AutoPublishRuntime::new());
+            let fetch_scheduler_runtime = Arc::new(FetchSchedulerRuntime::new());
+            let backup_scheduler_runtime = Arc::new(BackupSchedulerRuntime::new());
             let ai_worker = Arc::new(AiWorkerRuntime::new());
             let local_llm = Arc::new(LocalLlmRuntime::new());
             let local_embed = Arc::new(LocalEmbedRuntime::new());
@@ -108,11 +128,14 @@ pub fn run() {
                 db: database,
                 http_pool: Mutex::new(http_pool),
                 fetch_runtime: FetchRuntime::new(),
+                fetch_scheduler_runtime: fetch_scheduler_runtime.clone(),
+                backup_scheduler_runtime: backup_scheduler_runtime.clone(),
                 auto_publish_runtime: publish_runtime.clone(),
                 ai_worker: ai_worker.clone(),
                 local_llm: local_llm.clone(),
                 local_embed: local_embed.clone(),
                 scheduler: Mutex::new(None),
+                backup_scheduler: Mutex::new(None),
                 auto_publish_scheduler: Mutex::new(None),
             });
 
@@ -130,11 +153,22 @@ pub fn run() {
 
             let scheduler = scheduler::start_scheduler(
                 state.clone(),
+                fetch_scheduler_runtime,
                 FetchConfig::from_settings(&settings),
             );
 
             if let Ok(mut guard) = state.scheduler.lock() {
                 *guard = Some(scheduler);
+            }
+
+            let backup_scheduler = backup_scheduler::start_backup_scheduler(
+                state.clone(),
+                backup_scheduler_runtime,
+                BackupSchedulerConfig::from_settings(&settings),
+            );
+
+            if let Ok(mut guard) = state.backup_scheduler.lock() {
+                *guard = Some(backup_scheduler);
             }
 
             let auto_publish = auto_publish_scheduler::start_auto_publish_scheduler(
@@ -146,6 +180,8 @@ pub fn run() {
             if let Ok(mut guard) = state.auto_publish_scheduler.lock() {
                 *guard = Some(auto_publish);
             }
+
+            fetch::purge_puzzle_hints_from_queue(&state);
 
             app.manage(state);
 
@@ -178,6 +214,7 @@ pub fn run() {
             commands::update_post,
             commands::refresh_post_source,
             commands::delete_post,
+            commands::reprocess_post,
             commands::fetch_news,
             commands::cancel_fetch_news,
             commands::get_automation_status,
@@ -185,7 +222,11 @@ pub fn run() {
             commands::publish_post,
             commands::unpublish_post,
             commands::delete_queue_posts,
+            commands::regenerate_queue_images,
             commands::reset_all_data,
+            commands::pick_backup_directory,
+            commands::export_backup_manual,
+            commands::import_backup,
             commands::get_dashboard_stats,
             commands::get_publish_history,
             commands::get_published_posts,

@@ -1,5 +1,5 @@
 use crate::models::{PublishResult, UnpublishResult};
-use crate::services::{ai, data_dir, dedup_pipeline, post_text, settings_store, telegram_api, vk_api};
+use crate::services::{ai, content_filter, data_dir, dedup_pipeline, post_text, settings_store, telegram_api, vk_api};
 use crate::AppState;
 use anyhow::Result;
 use chrono::Utc;
@@ -12,6 +12,13 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         .ai_title
         .as_deref()
         .unwrap_or(&post.raw_title);
+
+    if content_filter::is_hints_or_puzzle_answer_content(title, &post.source_url)
+        || content_filter::is_hints_or_puzzle_answer_content(&post.raw_title, &post.source_url)
+    {
+        let _ = state.db.forget_post(id);
+        anyhow::bail!("Пост про подсказки/ответы к ежедневным головоломкам — пропущен");
+    }
 
     if settings.ai_duplicate_check
         && ai::ai_is_configured_for_duplicate(&settings, &state.local_llm, &state.local_embed)

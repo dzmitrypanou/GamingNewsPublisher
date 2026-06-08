@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileUp, Link2, Loader2, Pause, Save, TestTube, Trash2, X } from "lucide-react";
+import { FileUp, FolderOpen, ImageIcon, Link2, Loader2, Pause, RotateCcw, Save, TestTube, Trash2, Upload, Download, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,8 +8,12 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   getSettings,
+  regenerateQueueImages,
   saveSettings,
   resetAllData,
+  exportBackupManual,
+  importBackup,
+  pickBackupDirectory,
   testVk,
   testTelegram,
   testDeepseek,
@@ -33,6 +37,7 @@ import { dialog } from "@/lib/dialog";
 import type { AppSettings, ApiTestResult, LocalModelInfo, LocalModelsOverview } from "@/lib/types";
 import { cn, countProxyLines, mergeProxyLists } from "@/lib/utils";
 import { WatermarkEditor } from "@/components/settings/WatermarkEditor";
+import { ScheduleDateTimePicker } from "@/components/ui/schedule-datetime-picker";
 
 const DEFAULT_PROMPT = `Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
 Если исходный текст на другом языке — переведи. Если уже на {language} — перепиши живым языком для соцсетей.
@@ -67,6 +72,9 @@ const defaultSettings: AppSettings = {
   ai_prompt_template: DEFAULT_PROMPT,
   auto_fetch: true,
   fetch_interval_minutes: 30,
+  fetch_schedule_start_at: "",
+  fetch_repeat_unit: "minutes",
+  fetch_repeat_every: 30,
   fetch_items_per_source: 10,
   fetch_sources_concurrency: 6,
   fetch_items_concurrency: 4,
@@ -98,6 +106,12 @@ const defaultSettings: AppSettings = {
   watermark_size_mode: "scale",
   watermark_width_px: 0,
   watermark_height_px: 0,
+  watermark_backdrop: "none",
+  watermark_backdrop_opacity: 65,
+  watermark_backdrop_padding: 14,
+  watermark_backdrop_color: "#000000",
+  watermark_backdrop_logo_x: 14,
+  watermark_backdrop_logo_y: 14,
   fetch_full_article_text: true,
   web_context_enabled: true,
   web_search_provider: "article_only",
@@ -105,6 +119,11 @@ const defaultSettings: AppSettings = {
   ai_duplicate_window_days: 30,
   ai_duplicate_check_limit: 200,
   ai_duplicate_llm_top_k: 50,
+  backup_enabled: false,
+  backup_schedule_start_at: "",
+  backup_repeat_unit: "days",
+  backup_repeat_every: 1,
+  backup_directory: "backup",
 };
 
 const PANEL_HEADER = "p-4 pb-2";
@@ -121,6 +140,9 @@ export function Settings() {
   const [saved, setSaved] = useState(false);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [exportingBackup, setExportingBackup] = useState(false);
+  const [importingBackup, setImportingBackup] = useState(false);
+  const [pickingBackupDir, setPickingBackupDir] = useState(false);
   const [proxyUrl, setProxyUrl] = useState("");
   const [proxyImporting, setProxyImporting] = useState<"file" | "url" | null>(null);
   const [localLlm, setLocalLlm] = useState<LocalModelsOverview | null>(null);
@@ -129,6 +151,7 @@ export function Settings() {
   const [customModelUrl, setCustomModelUrl] = useState("");
   const [addingCustomModel, setAddingCustomModel] = useState(false);
   const [showCustomModelForm, setShowCustomModelForm] = useState(false);
+  const [regeneratingQueueImages, setRegeneratingQueueImages] = useState(false);
 
   const formatGb = (bytes: number) => {
     if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} ГБ`;
@@ -654,6 +677,24 @@ export function Settings() {
     setSaved(false);
   };
 
+  const handleResetPrompt = async () => {
+    if (settings.ai_prompt_template === DEFAULT_PROMPT) return;
+
+    if (
+      !(await dialog.confirm(
+        "Текущий шаблон промпта будет заменён на стандартный. Несохранённые изменения в других полях не затрагиваются.",
+        {
+          title: "Сбросить промпт?",
+          confirmText: "Сбросить",
+        }
+      ))
+    ) {
+      return;
+    }
+
+    update("ai_prompt_template", DEFAULT_PROMPT);
+  };
+
   const handleResetAll = async () => {
     if (
       !(await dialog.confirm(
@@ -712,8 +753,102 @@ export function Settings() {
     }
   };
 
+  const handleRegenerateQueueImages = async () => {
+    if (
+      !(await dialog.confirm(
+        "Все посты в очереди получат новые изображения с текущими настройками кадра и водяного знака. Опубликованные посты не затрагиваются.",
+        {
+          title: "Перегенерировать изображения в очереди?",
+          confirmText: "Перегенерировать",
+        }
+      ))
+    ) {
+      return;
+    }
+
+    setRegeneratingQueueImages(true);
+    try {
+      const result = await regenerateQueueImages();
+      const lines = [
+        `Всего в очереди: ${result.total}`,
+        `Обновлено: ${result.updated}`,
+        `Без изменений: ${result.skipped}`,
+        `Ошибок: ${result.failed}`,
+      ];
+      if (result.errors.length > 0) {
+        lines.push("", ...result.errors.slice(0, 5));
+      }
+      await dialog.alert(lines.join("\n"), {
+        title: result.failed > 0 ? "Готово с ошибками" : "Готово",
+        variant: result.failed > 0 ? "info" : "success",
+      });
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
+    } finally {
+      setRegeneratingQueueImages(false);
+    }
+  };
+
+  const handleExportBackup = async () => {
+    setExportingBackup(true);
+    try {
+      const result = await exportBackupManual();
+      const sizeMb = (result.size_bytes / (1024 * 1024)).toFixed(2);
+      await dialog.alert(`Бэкап сохранён:\n${result.path}\n${sizeMb} МБ`, {
+        title: "Экспорт выполнен",
+        variant: "success",
+      });
+    } catch (e) {
+      const message = String(e);
+      if (!message.includes("отменено")) {
+        await dialog.alert(message, { title: "Ошибка экспорта", variant: "error" });
+      }
+    } finally {
+      setExportingBackup(false);
+    }
+  };
+
+  const handleImportBackup = async () => {
+    if (
+      !(await dialog.confirm(
+        "Текущие данные будут заменены содержимым бэкапа. Приложение перезапустится.",
+        {
+          title: "Импорт бэкапа?",
+          confirmText: "Импортировать",
+          destructive: true,
+        }
+      ))
+    ) {
+      return;
+    }
+    setImportingBackup(true);
+    try {
+      await importBackup();
+    } catch (e) {
+      const message = String(e);
+      if (!message.includes("не выбран")) {
+        await dialog.alert(message, { title: "Ошибка импорта", variant: "error" });
+      }
+      setImportingBackup(false);
+    }
+  };
+
+  const handlePickBackupDirectory = async () => {
+    setPickingBackupDir(true);
+    try {
+      const path = await pickBackupDirectory();
+      update("backup_directory", path);
+    } catch (e) {
+      const message = String(e);
+      if (!message.includes("не выбрана")) {
+        await dialog.alert(message, { title: "Ошибка", variant: "error" });
+      }
+    } finally {
+      setPickingBackupDir(false);
+    }
+  };
+
   const handleImportProxyFile = async () => {
-    setProxyImporting("file");
     try {
       const content = await pickProxyFile();
       update("proxy_list", mergeProxyLists(settings.proxy_list, content));
@@ -815,7 +950,6 @@ export function Settings() {
         <Card>
           <CardHeader className={PANEL_HEADER}>
             <CardTitle className="text-base">Публикация</CardTitle>
-            <CardDescription className="text-xs">VK и Telegram</CardDescription>
           </CardHeader>
           <CardContent className={PANEL_CONTENT}>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -829,9 +963,6 @@ export function Settings() {
                     onChange={(e) => update("vk_token", e.target.value)}
                     placeholder="vk1.a...."
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Из группы: Управление → Работа с API → Ключи доступа (wall, photos, управление).
-                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">User token (для фото)</Label>
@@ -841,20 +972,6 @@ export function Settings() {
                     onChange={(e) => update("vk_user_token", e.target.value)}
                     placeholder="vk1.a.... (необязательно)"
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Токен администратора — для upload фото. На{" "}
-                    <a
-                      href="https://vkhost.github.io/"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline"
-                    >
-                      vkhost.github.io
-                    </a>{" "}
-                    обязательно отметьте: <strong>Фотографии</strong>, <strong>Стена</strong>,{" "}
-                    <strong>Группы</strong>, <strong>Бессрочный</strong>. Без «Фотографии» upload не
-                    работает — останется превью по ссылке на статью.
-                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">ID группы</Label>
@@ -997,7 +1114,19 @@ export function Settings() {
             ) : null}
 
             <div className="space-y-1.5">
-              <Label className="text-xs">Шаблон промпта</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-xs">Шаблон промпта</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleResetPrompt()}
+                  disabled={settings.ai_prompt_template === DEFAULT_PROMPT}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  По умолчанию
+                </Button>
+              </div>
               <Textarea
                 value={settings.ai_prompt_template}
                 onChange={(e) => update("ai_prompt_template", e.target.value)}
@@ -1172,17 +1301,97 @@ export function Settings() {
               />
             </div>
             {settings.auto_fetch && (
-              <div className="space-y-2">
-                <Label>Интервал автопарсинга (мин)</Label>
-                <Input
-                  type="number"
-                  min={5}
-                  max={1440}
-                  value={settings.fetch_interval_minutes}
-                  onChange={(e) =>
-                    update("fetch_interval_minutes", parseInt(e.target.value) || 30)
+              <div className="space-y-4 rounded-lg border border-border bg-secondary/10 p-3">
+                <div>
+                  <Label>Начало автопарсинга</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Дата и время первого запуска. Пустые поля — начать сразу после включения.
+                  </p>
+                </div>
+                <ScheduleDateTimePicker
+                  value={settings.fetch_schedule_start_at}
+                  onChange={(fetch_schedule_start_at) =>
+                    patchSettings({ fetch_schedule_start_at })
                   }
+                  placeholder="Не задано — начать сразу"
+                  defaultTime="09:00"
                 />
+
+                <div className="space-y-2">
+                  <Label>Повтор</Label>
+                  <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-secondary/20 p-1">
+                    {(
+                      [
+                        ["minutes", "Минуты"],
+                        ["hours", "Часы"],
+                        ["days", "Дни"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() =>
+                          patchSettings({
+                            fetch_repeat_unit: value,
+                            ...(value === "minutes"
+                              ? { fetch_interval_minutes: settings.fetch_repeat_every || 30 }
+                              : {}),
+                          })
+                        }
+                        className={cn(
+                          "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                          settings.fetch_repeat_unit === value
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>
+                    {settings.fetch_repeat_unit === "days"
+                      ? settings.fetch_repeat_every === 1
+                        ? "Каждый день"
+                        : `Каждые ${settings.fetch_repeat_every} дн.`
+                      : settings.fetch_repeat_unit === "hours"
+                        ? settings.fetch_repeat_every === 1
+                          ? "Каждый час."
+                          : `Каждые ${settings.fetch_repeat_every} ч.`
+                        : `Каждые ${settings.fetch_repeat_every} мин.`}
+                  </Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={
+                      settings.fetch_repeat_unit === "days"
+                        ? 365
+                        : settings.fetch_repeat_unit === "hours"
+                          ? 168
+                          : 1440
+                    }
+                    value={settings.fetch_repeat_every}
+                    onChange={(e) => {
+                      const every = Math.max(1, parseInt(e.target.value) || 1);
+                      patchSettings({
+                        fetch_repeat_every: every,
+                        ...(settings.fetch_repeat_unit === "minutes"
+                          ? { fetch_interval_minutes: every }
+                          : {}),
+                      });
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {settings.fetch_schedule_start_at
+                      ? settings.fetch_repeat_unit === "days"
+                        ? "Следующие запуски — в то же время, что указано в «Начало»."
+                        : "Интервал считается от времени начала."
+                      : "Без даты начала интервал считается от последнего сбора."}
+                  </p>
+                </div>
               </div>
             )}
             <div className="space-y-2">
@@ -1300,6 +1509,151 @@ export function Settings() {
                 checked={settings.auto_publish}
                 onCheckedChange={(v) => update("auto_publish", v)}
               />
+            </div>
+            <div className="rounded-lg border border-border bg-secondary/10 p-4 space-y-4">
+              <div>
+                <Label>Бэкапы данных</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  База, настройки, изображения постов и водяные знаки упаковываются в один ZIP-файл.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleExportBackup()}
+                  disabled={exportingBackup}
+                >
+                  {exportingBackup ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Экспорт
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleImportBackup()}
+                  disabled={importingBackup}
+                >
+                  {importingBackup ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  Импорт
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label>Автобэкап</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Сохранять бэкап в выбранную папку по расписанию
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.backup_enabled}
+                  onCheckedChange={(v) => update("backup_enabled", v)}
+                />
+              </div>
+
+              {settings.backup_enabled && (
+                <div className="space-y-4 rounded-lg border border-border bg-secondary/20 p-3">
+                  <div className="space-y-2">
+                    <Label className="text-xs">Папка для бэкапов</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={settings.backup_directory}
+                        onChange={(e) => update("backup_directory", e.target.value)}
+                        placeholder="backup"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => void handlePickBackupDirectory()}
+                        disabled={pickingBackupDir}
+                      >
+                        {pickingBackupDir ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <FolderOpen className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      По умолчанию <span className="font-mono">backup</span> в папке с программой.
+                      Можно указать абсолютный путь.
+                    </p>
+                  </div>
+
+                  <ScheduleDateTimePicker
+                    value={settings.backup_schedule_start_at}
+                    onChange={(backup_schedule_start_at) =>
+                      patchSettings({ backup_schedule_start_at })
+                    }
+                    placeholder="Не задано — начать сразу"
+                    defaultTime="03:00"
+                  />
+
+                  <div className="space-y-2">
+                    <Label>Повтор</Label>
+                    <div className="grid grid-cols-3 gap-2 rounded-lg border border-border bg-secondary/20 p-1">
+                      {(
+                        [
+                          ["minutes", "Минуты"],
+                          ["hours", "Часы"],
+                          ["days", "Дни"],
+                        ] as const
+                      ).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => update("backup_repeat_unit", value)}
+                          className={cn(
+                            "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                            settings.backup_repeat_unit === value
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                          )}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>
+                      {settings.backup_repeat_unit === "days"
+                        ? settings.backup_repeat_every === 1
+                          ? "Каждый день"
+                          : `Каждые ${settings.backup_repeat_every} дн.`
+                        : settings.backup_repeat_unit === "hours"
+                          ? settings.backup_repeat_every === 1
+                            ? "Каждый час."
+                            : `Каждые ${settings.backup_repeat_every} ч.`
+                          : `Каждые ${settings.backup_repeat_every} мин.`}
+                    </Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={
+                        settings.backup_repeat_unit === "days"
+                          ? 365
+                          : settings.backup_repeat_unit === "hours"
+                            ? 168
+                            : 1440
+                      }
+                      value={settings.backup_repeat_every}
+                      onChange={(e) =>
+                        update("backup_repeat_every", Math.max(1, parseInt(e.target.value) || 1))
+                      }
+                    />
+                  </div>
+                </div>
+              )}
             </div>
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
               <div className="mb-3">
@@ -1437,12 +1791,33 @@ export function Settings() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              Действует только для новых сборов. Уже сохранённые картинки не пересчитываются.
-              Соотношение сторон:{" "}
+              Для новых сборов применяется автоматически. Для постов в очереди используйте
+              перегенерацию ниже. Соотношение сторон:{" "}
               {(settings.post_image_width / settings.post_image_height).toFixed(2)}:1
             </p>
             <div className="border-t border-border pt-3">
               <WatermarkEditor settings={settings} onChange={update} onPatch={patchSettings} />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-secondary/10 p-3">
+              <div>
+                <p className="text-sm font-medium">Изображения в очереди</p>
+                <p className="text-xs text-muted-foreground">
+                  Пересобрать картинки всех постов в очереди с текущим водяным знаком и подложкой.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleRegenerateQueueImages()}
+                disabled={regeneratingQueueImages}
+              >
+                {regeneratingQueueImages ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ImageIcon className="h-4 w-4" />
+                )}
+                Перегенерировать
+              </Button>
             </div>
           </CardContent>
         </Card>

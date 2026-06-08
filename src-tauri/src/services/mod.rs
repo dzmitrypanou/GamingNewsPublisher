@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod backup;
 pub mod data_dir;
 pub mod dedup_pipeline;
 pub mod deepseek;

@@ -1,22 +1,26 @@
 use crate::fetch;
-use crate::models::AppSettings;
+use crate::fetch_schedule::{self, FetchScheduleConfig};
+use crate::fetch_scheduler_runtime::FetchSchedulerRuntime;
 use crate::AppState;
+use chrono::Local;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchConfig {
-    pub enabled: bool,
-    pub interval_minutes: u32,
+    pub schedule: FetchScheduleConfig,
 }
 
 impl FetchConfig {
-    pub fn from_settings(settings: &AppSettings) -> Self {
+    pub fn from_settings(settings: &crate::models::AppSettings) -> Self {
         Self {
-            enabled: settings.auto_fetch,
-            interval_minutes: settings.fetch_interval_minutes.max(5),
+            schedule: FetchScheduleConfig::from_settings(settings),
         }
+    }
+
+    pub fn interval_minutes(&self) -> u32 {
+        self.schedule.interval_minutes()
     }
 }
 
@@ -30,27 +34,20 @@ impl SchedulerHandle {
     }
 }
 
-pub fn start_scheduler(state: Arc<AppState>, initial: FetchConfig) -> SchedulerHandle {
-    let (config_tx, mut config_rx) = watch::channel(initial.clone());
+pub fn start_scheduler(
+    state: Arc<AppState>,
+    runtime: Arc<FetchSchedulerRuntime>,
+    initial: FetchConfig,
+) -> SchedulerHandle {
+    let (config_tx, mut config_rx) = watch::channel(initial);
     let config_tx_clone = config_tx.clone();
 
     tauri::async_runtime::spawn(async move {
-        if initial.enabled {
-            let state_startup = state.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                if let Err(e) = fetch::do_fetch(state_startup).await {
-                    if !e.to_string().contains("уже выполняется") {
-                        eprintln!("Startup fetch error: {}", e);
-                    }
-                }
-            });
-        }
-
         loop {
             let config = config_rx.borrow().clone();
 
-            if !config.enabled {
+            if !config.schedule.enabled {
+                runtime.clear();
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(30)) => {}
                     result = config_rx.changed() => {
@@ -63,13 +60,28 @@ pub fn start_scheduler(state: Arc<AppState>, initial: FetchConfig) -> SchedulerH
                 continue;
             }
 
-            let sleep_duration =
-                Duration::from_secs(config.interval_minutes.max(5) as u64 * 60);
+            let now = Local::now();
+            let last_fetch_at = state
+                .db
+                .get_dashboard_stats()
+                .ok()
+                .and_then(|stats| stats.last_fetch_at)
+                .and_then(|raw| fetch_schedule::parse_last_fetch_at(&raw));
+
+            let Some((next_at, sleep_duration)) =
+                fetch_schedule::compute_next_fetch(&config.schedule, now, last_fetch_at)
+            else {
+                runtime.clear();
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            };
+
+            runtime.set_next(next_at, sleep_duration);
 
             tokio::select! {
                 _ = tokio::time::sleep(sleep_duration) => {
                     let current = config_rx.borrow().clone();
-                    if !current.enabled {
+                    if !current.schedule.enabled {
                         continue;
                     }
 

@@ -2,6 +2,7 @@ use crate::models::AppSettings;
 use crate::services::content_filter;
 use crate::services::rss_fetcher;
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
 use serde_json::json;
@@ -132,6 +133,66 @@ pub async fn enrich_rss_description(
         .unwrap_or_default();
 
     pick_best_article_text(&rss_clean, &full_clean)
+}
+
+static OG_TITLE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?is)<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']"#)
+        .expect("og:title regex")
+});
+static OG_TITLE_RE_ALT: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?is)<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']"#)
+        .expect("og:title alt regex")
+});
+static HTML_TITLE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?is)<title[^>]*>([^<]+)</title>").expect("title regex"));
+
+pub fn extract_page_title(html: &str) -> Option<String> {
+    let title = OG_TITLE_RE
+        .captures(html)
+        .or_else(|| OG_TITLE_RE_ALT.captures(html))
+        .or_else(|| HTML_TITLE_RE.captures(html))
+        .and_then(|cap| cap.get(1))
+        .map(|m| m.as_str().trim())
+        .filter(|t| !t.is_empty())
+        .map(|t| rss_fetcher::clean_html(t).trim().to_string())
+        .filter(|t| !t.is_empty())?;
+    Some(title)
+}
+
+pub async fn fetch_page_title(client: &Client, url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() || (!url.starts_with("http://") && !url.starts_with("https://")) {
+        return None;
+    }
+
+    let mut request = client
+        .get(url)
+        .header("User-Agent", rss_fetcher::user_agent())
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header("Accept-Language", "en-US,en;q=0.9,ru;q=0.8")
+        .timeout(ArticleFetchMode::RssEnrich.request_timeout());
+
+    if let Some(referer) = article_referer(url) {
+        request = request.header("Referer", referer);
+    }
+
+    let response = request.send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let bytes = response.bytes().await.ok()?;
+    let max_bytes = 256 * 1024;
+    let html = if bytes.len() > max_bytes {
+        String::from_utf8_lossy(&bytes[..max_bytes]).into_owned()
+    } else {
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
+
+    extract_page_title(&html)
 }
 
 fn pick_best_article_text(rss: &str, full: &str) -> String {
