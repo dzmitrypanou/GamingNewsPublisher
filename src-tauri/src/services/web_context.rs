@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
-use serde_json::json;
 use std::time::Duration;
 
 const MAX_CONTEXT_CHARS: usize = 3000;
@@ -79,41 +78,18 @@ pub async fn build_web_context(
     client: &Client,
     settings: &AppSettings,
     source_url: &str,
-    title: &str,
 ) -> String {
     if !settings.web_context_enabled {
         return String::new();
     }
 
-    let mut parts: Vec<String> = Vec::new();
-
-    if settings.web_search_provider == "article_only" || settings.web_search_provider == "tavily" {
-        if let Ok(article) =
-            fetch_article_text(client, source_url, ArticleFetchMode::WebContext).await
-        {
-            if !article.is_empty() {
-                parts.push(format!("Полный текст статьи с сайта:\n{article}"));
-            }
-        }
+    match fetch_article_text(client, source_url, ArticleFetchMode::WebContext).await {
+        Ok(article) if !article.is_empty() => truncate_chars(
+            &format!("Полный текст статьи с сайта:\n{article}"),
+            MAX_CONTEXT_CHARS,
+        ),
+        _ => String::new(),
     }
-
-    if settings.web_search_provider == "tavily" && !settings.tavily_api_key.trim().is_empty() {
-        match tavily_search(client, settings.tavily_api_key.trim(), title).await {
-            Ok(snippet) if !snippet.is_empty() => {
-                parts.push(format!("Дополнительный контекст из поиска:\n{snippet}"));
-            }
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Tavily search: {}", e);
-            }
-        }
-    }
-
-    if parts.is_empty() {
-        return String::new();
-    }
-
-    truncate_chars(&parts.join("\n\n"), MAX_CONTEXT_CHARS)
 }
 
 pub async fn enrich_rss_description(
@@ -547,57 +523,6 @@ fn json_ld_is_article_type(value: Option<&serde_json::Value>) -> bool {
         }),
         _ => false,
     }
-}
-
-async fn tavily_search(client: &Client, api_key: &str, query: &str) -> Result<String> {
-    let query = query.trim();
-    if query.is_empty() {
-        return Ok(String::new());
-    }
-
-    let body = json!({
-        "api_key": api_key,
-        "query": query,
-        "max_results": 3,
-        "search_depth": "basic",
-        "include_answer": true,
-    });
-
-    let response = client
-        .post("https://api.tavily.com/search")
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .context("Tavily request failed")?;
-
-    if !response.status().is_success() {
-        let err = response.text().await.unwrap_or_default();
-        anyhow::bail!("Tavily API error: {}", err);
-    }
-
-    let json: serde_json::Value = response.json().await.context("Tavily JSON invalid")?;
-    let mut parts: Vec<String> = Vec::new();
-
-    if let Some(answer) = json.get("answer").and_then(|v| v.as_str()) {
-        let answer = answer.trim();
-        if !answer.is_empty() {
-            parts.push(answer.to_string());
-        }
-    }
-
-    if let Some(results) = json.get("results").and_then(|v| v.as_array()) {
-        for item in results.iter().take(3) {
-            let title = item.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            if title.is_empty() && content.is_empty() {
-                continue;
-            }
-            parts.push(format!("{title}: {content}"));
-        }
-    }
-
-    Ok(truncate_chars(&parts.join("\n"), 1500))
 }
 
 fn truncate_chars(text: &str, max: usize) -> String {

@@ -11,7 +11,7 @@ const FULL_STRONG_THRESHOLD: f32 = 0.88;
 const FULL_WITH_TITLE_THRESHOLD: f32 = 0.82;
 const TITLE_THRESHOLD: f32 = 0.84;
 /// Borderline embedding score plus lexical overlap (rephrased same-language story).
-const FULL_WITH_LEXICAL_THRESHOLD: f32 = 0.80;
+const FULL_WITH_LEXICAL_THRESHOLD: f32 = 0.76;
 
 #[derive(Debug, Clone, Copy)]
 enum EmbedSide {
@@ -163,6 +163,9 @@ fn classify_duplicate(
     if full_sim >= FULL_WITH_TITLE_THRESHOLD && title_sim >= TITLE_THRESHOLD {
         return true;
     }
+    if full_sim >= FULL_WITH_LEXICAL_THRESHOLD && title_sim >= TITLE_THRESHOLD {
+        return true;
+    }
     if full_sim >= FULL_WITH_LEXICAL_THRESHOLD
         && (duplicate::titles_similar(new_title, kept_title)
             || duplicate::descriptions_similar(new_desc, kept_desc))
@@ -236,14 +239,25 @@ async fn embed_text(
 
 fn prepare_embed_text(model_id: &str, side: EmbedSide, title: &str, description: &str) -> String {
     let base = combined_text(title, description);
+    format_embed_input(model_id, side, &base)
+}
+
+fn format_embed_input(model_id: &str, side: EmbedSide, text: &str) -> String {
     if model_id.contains("e5") {
         let prefix = match side {
             EmbedSide::Query => "query: ",
             EmbedSide::Passage => "passage: ",
         };
-        format!("{prefix}{base}")
+        format!("{prefix}{text}")
+    } else if model_id.contains("bge") {
+        match side {
+            EmbedSide::Query => format!(
+                "Represent this sentence for searching relevant passages: {text}"
+            ),
+            EmbedSide::Passage => text.to_string(),
+        }
     } else {
-        base
+        text.to_string()
     }
 }
 
@@ -318,5 +332,53 @@ mod tests {
             "Rockstar releases GTA 6 trailer",
             "Take-Two announced the trailer",
         ));
+    }
+
+    #[test]
+    fn accepts_title_embedding_match_at_76_percent() {
+        assert!(classify_duplicate(
+            0.78,
+            0.85,
+            "Castlevania: Belmont's Curse Gets October 2026 Release Date",
+            "Konami announced the date",
+            "Konami's next 2D Castlevania game, Belmont's Curse, is arriving in time for Halloween",
+            "Halloween 2026 launch",
+        ));
+    }
+
+    #[test]
+    fn rejects_roundup_style_scores_without_title_match() {
+        assert!(!classify_duplicate(
+            0.80,
+            0.78,
+            "Carcass Clad tank game from Mouthwashing team",
+            "co-op horror tank sim",
+            "The Sunday Papers",
+            "Sundays are for recovering after trailerblogging",
+        ));
+    }
+
+    #[test]
+    fn bge_m3_uses_retrieval_instruction_for_query_only() {
+        assert_eq!(
+            format_embed_input("bge-m3", EmbedSide::Query, "GTA 6 trailer"),
+            "Represent this sentence for searching relevant passages: GTA 6 trailer"
+        );
+        assert_eq!(
+            format_embed_input("bge-m3", EmbedSide::Passage, "GTA 6 trailer"),
+            "GTA 6 trailer"
+        );
+    }
+
+    #[test]
+    fn e5_large_uses_query_passage_prefixes() {
+        assert_eq!(
+            format_embed_input("multilingual-e5-large", EmbedSide::Query, "news"),
+            "query: news"
+        );
+        assert_eq!(
+            format_embed_input("multilingual-e5-large", EmbedSide::Passage, "news"),
+            "passage: news"
+        );
     }
 }

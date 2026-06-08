@@ -58,7 +58,7 @@ export interface AppSettings {
   watermark_backdrop_logo_y: number;
   fetch_full_article_text: boolean;
   web_context_enabled: boolean;
-  web_search_provider: "off" | "article_only" | "tavily";
+  web_search_provider: "off" | "article_only";
   tavily_api_key: string;
   ai_duplicate_window_days: number;
   ai_duplicate_check_limit: number;

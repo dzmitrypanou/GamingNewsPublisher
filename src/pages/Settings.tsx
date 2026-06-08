@@ -1206,44 +1206,6 @@ export function Settings() {
                   onCheckedChange={(v) => update("web_context_enabled", v)}
                 />
               </div>
-              {settings.web_context_enabled && (
-                <div className="space-y-2">
-                  <Label className="text-xs">Источник контекста</Label>
-                  <div className="grid grid-cols-2 gap-1 rounded-md border border-border bg-background/50 p-0.5">
-                    {(
-                      [
-                        ["article_only", "Статья по URL"],
-                        ["tavily", "Статья + Tavily"],
-                      ] as const
-                    ).map(([value, label]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => update("web_search_provider", value)}
-                        className={cn(
-                          "rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
-                          settings.web_search_provider === value
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:text-foreground"
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  {settings.web_search_provider === "tavily" && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">Tavily API Key</Label>
-                      <Input
-                        type="password"
-                        value={settings.tavily_api_key}
-                        onChange={(e) => update("tavily_api_key", e.target.value)}
-                        placeholder="tvly-..."
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
             <div className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
               <div>
@@ -1253,7 +1215,7 @@ export function Settings() {
                     ? "Выберите провайдера для проверки дублей выше."
                     : settings.ai_duplicate_provider === "local"
                       ? activeDedupModel?.model_kind === "encoder"
-                        ? `URL и заголовки — по всей базе; энкодер сравнивает до ${Math.max(settings.ai_duplicate_llm_top_k, 50)} кандидатов (текст + заголовки, порог 88% или 82%+схожие заголовки).`
+                        ? `URL и заголовки — по всей базе; энкодер сравнивает до ${Math.max(settings.ai_duplicate_llm_top_k, 50)} кандидатов (порог 88%, или 82%+заголовки, или 76%+лексика; подборки вроде Sunday Papers игнорируются).`
                         : `URL и заголовки — по всей базе; LLM сравнивает до ${Math.max(settings.ai_duplicate_llm_top_k, 50)} кандидатов (до ${Math.min(settings.ai_dedup_concurrency, 2)} параллельно).`
                       : "URL и заголовки — по всей базе; LLM — до top-K кандидатов через облачный API."}
                 </p>

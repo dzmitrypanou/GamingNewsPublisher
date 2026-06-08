@@ -358,10 +358,17 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("web_context_enabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
-        web_search_provider: store
-            .get("web_search_provider")
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| "article_only".to_string()),
+        web_search_provider: {
+            let raw = store
+                .get("web_search_provider")
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| "article_only".to_string());
+            if raw == "tavily" {
+                "article_only".to_string()
+            } else {
+                raw
+            }
+        },
         tavily_api_key: store
             .get("tavily_api_key")
             .and_then(|v| v.as_str().map(String::from))

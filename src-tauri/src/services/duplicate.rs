@@ -98,6 +98,48 @@ pub fn content_matches(
     titles_similar(new_title, existing_title) || descriptions_similar(new_desc, existing_desc)
 }
 
+/// Link roundups / digests are not a single news event — skip as dedup reference targets.
+pub fn is_link_roundup_title(title: &str) -> bool {
+    let norm = normalize_title(title);
+    if norm.is_empty() {
+        return false;
+    }
+
+    const EXACT: &[&str] = &[
+        "the sunday papers",
+        "sunday papers",
+        "saturday critic",
+        "friday roundup",
+        "weekly roundup",
+        "news roundup",
+        "news round up",
+        "this week in games",
+        "week in review",
+        "the week in review",
+        "link dump",
+        "links we liked",
+        "morning coffee",
+        "the morning coffee",
+        "critical distance",
+        "free games roundup",
+    ];
+
+    if EXACT.iter().any(|p| norm == *p) {
+        return true;
+    }
+
+    if norm.contains("sunday paper")
+        || norm.contains("roundup")
+        || norm.contains("round up")
+        || norm.starts_with("weekly digest")
+        || norm.starts_with("daily digest")
+    {
+        return true;
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +165,16 @@ mod tests {
         assert!(titles_similar(
             "GTA 6 trailer released by Rockstar",
             "Rockstar releases GTA 6 trailer"
+        ));
+    }
+
+    #[test]
+    fn detects_link_roundup_titles() {
+        assert!(is_link_roundup_title("The Sunday Papers"));
+        assert!(is_link_roundup_title("Sunday Papers"));
+        assert!(is_link_roundup_title("Weekly Roundup: Best RPG news"));
+        assert!(!is_link_roundup_title(
+            "Castlevania: Belmont's Curse Gets October 2026 Release Date"
         ));
     }
 }

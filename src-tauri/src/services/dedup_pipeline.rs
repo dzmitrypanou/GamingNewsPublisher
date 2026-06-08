@@ -67,12 +67,17 @@ pub async fn check_duplicate(
     let window_days = Some(settings.ai_duplicate_window_days);
     let limit = settings.ai_duplicate_check_limit as i64;
     let status_filter = options.status_filter.as_deref();
-    let candidates = state.db.get_dedup_candidates(
-        window_days,
-        status_filter,
-        limit,
-        options.exclude_post_id,
-    )?;
+    let candidates: Vec<Post> = state
+        .db
+        .get_dedup_candidates(
+            window_days,
+            status_filter,
+            limit,
+            options.exclude_post_id,
+        )?
+        .into_iter()
+        .filter(|post| !duplicate::is_link_roundup_title(&post.raw_title))
+        .collect();
 
     if candidates.is_empty() {
         return Ok(None);

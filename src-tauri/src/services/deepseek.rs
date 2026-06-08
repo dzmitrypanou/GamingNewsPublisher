@@ -162,6 +162,10 @@ pub async fn find_ai_duplicate_among_posts(
     let dedup_model_id = settings.normalized_local_dedup_model_id();
 
     for post in posts {
+        if crate::services::duplicate::is_link_roundup_title(&post.raw_title) {
+            continue;
+        }
+
         let kept_title = post.ai_title.as_deref().unwrap_or(&post.raw_title).to_string();
         let kept_description = post
             .ai_text
@@ -307,13 +311,8 @@ async fn call_api(
 ) -> Result<AiResponse> {
     let language = language_label(&settings.post_language).to_string();
 
-    let web_context = crate::services::web_context::build_web_context(
-        client,
-        settings,
-        source_url,
-        title,
-    )
-    .await;
+    let web_context =
+        crate::services::web_context::build_web_context(client, settings, source_url).await;
     let web_context_block = if web_context.is_empty() {
         String::new()
     } else {
