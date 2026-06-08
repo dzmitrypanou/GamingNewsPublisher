@@ -83,12 +83,26 @@ pub async fn check_duplicate(
         return Ok(None);
     }
 
-    // Tier 2 + 4 prep: heuristic hits always go to AI; fill remaining slots up to top-K.
+    let dedup_family =
+        duplicate::dedup_encoder_family(&settings.normalized_local_dedup_model_id());
+
+    // Tier 2: high-confidence lexical headline match (E5-base often scores 0.72–0.75 on these).
+    if let Some(lexical) =
+        find_lexical_duplicate(title, dedup_family, &candidates, options.exclude_post_id)
+    {
+        return Ok(Some(lexical));
+    }
+
+    if options.should_cancel.as_ref().is_some_and(|f| f()) {
+        return Ok(None);
+    }
+
+    // Tier 3 + 4 prep: heuristic hits always go to AI; fill remaining slots up to top-K.
     // Scanning hundreds of posts with embeddings causes false positives (~0.77 generic score).
     let mut top_k = settings.ai_duplicate_llm_top_k as usize;
     top_k = top_k.max(50);
     top_k = top_k.min(settings.ai_duplicate_check_limit as usize);
-    let llm_candidates = rank_for_llm(title, description, &candidates, top_k);
+    let llm_candidates = rank_for_llm(title, description, &candidates, top_k, dedup_family);
 
     if llm_candidates.is_empty() {
         return Ok(None);
@@ -144,7 +158,97 @@ pub async fn check_duplicate(
     }))
 }
 
-fn rank_for_llm(new_title: &str, new_desc: &str, candidates: &[Post], top_k: usize) -> Vec<Post> {
+fn find_lexical_duplicate(
+    new_title: &str,
+    family: duplicate::DedupEncoderFamily,
+    candidates: &[Post],
+    exclude_post_id: Option<i64>,
+) -> Option<DedupMatch> {
+    let mut best: Option<((u32, u32, u32), DedupMatch)> = None;
+
+    for post in candidates {
+        if exclude_post_id == Some(post.id) {
+            continue;
+        }
+        let kept_display = post.ai_title.as_deref().unwrap_or(&post.raw_title);
+        if let Some((confidence, explanation)) = lexical_duplicate_verdict(
+            family,
+            new_title,
+            &post.raw_title,
+            post.ai_title.as_deref(),
+        ) {
+            let rank = duplicate::duplicate_match_rank_for_family(
+                family,
+                new_title,
+                &post.raw_title,
+                confidence,
+            );
+            let candidate = DedupMatch {
+                kept_post_id: post.id,
+                kept_title: kept_display.to_string(),
+                analysis: DuplicateAiAnalysis {
+                    is_duplicate: true,
+                    confidence,
+                    explanation,
+                },
+            };
+            if best.as_ref().map_or(true, |(r, _)| rank > *r) {
+                best = Some((rank, candidate));
+            }
+        }
+    }
+
+    best.map(|(_, m)| m)
+}
+
+fn lexical_duplicate_verdict(
+    family: duplicate::DedupEncoderFamily,
+    new_title: &str,
+    kept_raw_title: &str,
+    kept_ai_title: Option<&str>,
+) -> Option<(u32, String)> {
+    lexical_pair_verdict(family, new_title, kept_raw_title).or_else(|| {
+        kept_ai_title
+            .filter(|t| !t.trim().is_empty())
+            .and_then(|ai_title| lexical_pair_verdict(family, new_title, ai_title))
+    })
+}
+
+fn lexical_pair_verdict(
+    family: duplicate::DedupEncoderFamily,
+    new_title: &str,
+    kept_title: &str,
+) -> Option<(u32, String)> {
+    if duplicate::titles_match(new_title, kept_title) {
+        return Some((98, "Совпадение нормализованных заголовков".to_string()));
+    }
+    if duplicate::titles_strongly_similar_for_family(family, new_title, kept_title) {
+        let common = duplicate::distinctive_common_word_count(new_title, kept_title);
+        let pct = (duplicate::distinctive_word_jaccard(new_title, kept_title) * 100.0).round() as u32;
+        let confidence = (88 + common as u32).min(98);
+        return Some((
+            confidence,
+            format!("Схожие заголовки ({common} общих слов, {pct}% по словарю) — та же новость"),
+        ));
+    }
+    if duplicate::titles_medium_similar_for_family(family, new_title, kept_title) {
+        let common = duplicate::distinctive_common_word_count(new_title, kept_title);
+        let confidence = (84 + common as u32).min(94);
+        return Some((
+            confidence,
+            format!("Похожие заголовки ({common} общих слов) — та же новость"),
+        ));
+    }
+    None
+}
+
+fn rank_for_llm(
+    new_title: &str,
+    new_desc: &str,
+    candidates: &[Post],
+    top_k: usize,
+    family: duplicate::DedupEncoderFamily,
+) -> Vec<Post> {
     if candidates.is_empty() || top_k == 0 {
         return Vec::new();
     }
@@ -152,7 +256,7 @@ fn rank_for_llm(new_title: &str, new_desc: &str, candidates: &[Post], top_k: usi
     let mut scored: Vec<(i32, Post)> = candidates
         .iter()
         .map(|post| {
-            let score = heuristic_score_for_post(new_title, new_desc, post);
+            let score = heuristic_score_for_post(new_title, new_desc, post, family);
             (score, post.clone())
         })
         .collect();
@@ -180,19 +284,25 @@ fn rank_for_llm(new_title: &str, new_desc: &str, candidates: &[Post], top_k: usi
     selected
 }
 
-fn heuristic_score_for_post(new_title: &str, new_desc: &str, post: &Post) -> i32 {
+fn heuristic_score_for_post(
+    new_title: &str,
+    new_desc: &str,
+    post: &Post,
+    family: duplicate::DedupEncoderFamily,
+) -> i32 {
     let ai_title = post.ai_title.as_deref().unwrap_or(&post.raw_title);
     let ai_desc = post
         .ai_text
         .as_deref()
         .unwrap_or(&post.raw_description);
-    let mut score = heuristic_score(new_title, new_desc, ai_title, ai_desc);
+    let mut score = heuristic_score(new_title, new_desc, ai_title, ai_desc, family);
     if post.ai_title.is_some() || post.ai_text.is_some() {
         score = score.max(heuristic_score(
             new_title,
             new_desc,
             &post.raw_title,
             &post.raw_description,
+            family,
         ));
     }
     score
@@ -203,17 +313,84 @@ fn heuristic_score(
     new_desc: &str,
     kept_title: &str,
     kept_desc: &str,
+    family: duplicate::DedupEncoderFamily,
 ) -> i32 {
     let mut score = 0;
     if duplicate::titles_match(new_title, kept_title) {
         score += 100;
+    } else if duplicate::titles_strongly_similar_for_family(family, new_title, kept_title) {
+        score += 90;
+    } else if duplicate::titles_medium_similar_for_family(family, new_title, kept_title) {
+        score += 75;
     } else if duplicate::titles_similar(new_title, kept_title) {
         score += 60;
     }
+    score += duplicate::distinctive_common_word_count(new_title, kept_title) as i32 * 3;
     if duplicate::descriptions_similar(new_desc, kept_desc) {
         score += 40;
     } else if duplicate::content_matches(new_title, new_desc, kept_title, kept_desc) {
         score += 20;
     }
     score
+}
+
+/// Second pass after parallel ingest: re-check posts inserted in this fetch batch.
+pub async fn sweep_new_posts_for_duplicates(
+    state: &AppState,
+    settings: &AppSettings,
+    new_post_ids: &[i64],
+    should_cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+) -> Result<usize> {
+    if new_post_ids.is_empty() || !settings.ai_duplicate_check {
+        return Ok(0);
+    }
+
+    let mut sorted = new_post_ids.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+
+    let mut removed = 0usize;
+    for post_id in sorted {
+        if should_cancel.as_ref().is_some_and(|f| f()) {
+            break;
+        }
+
+        let post = match state.db.get_post(post_id) {
+            Ok(post) => post,
+            Err(_) => continue,
+        };
+        if post.status != "new" && post.status != "processing" {
+            continue;
+        }
+
+        let dup = check_duplicate(
+            state,
+            settings,
+            &post.raw_title,
+            &post.raw_description,
+            DedupCheckOptions {
+                exclude_post_id: Some(post_id),
+                status_filter: None,
+                should_cancel: should_cancel.clone(),
+            },
+        )
+        .await?;
+
+        let Some(dup) = dup else {
+            continue;
+        };
+
+        state.db.record_ai_duplicate(
+            &post.source_url,
+            &post.raw_title,
+            &post.raw_description,
+            Some(dup.kept_post_id),
+            Some(&dup.kept_title),
+            &dup.analysis,
+        )?;
+        state.db.delete_post(post_id)?;
+        removed += 1;
+    }
+
+    Ok(removed)
 }

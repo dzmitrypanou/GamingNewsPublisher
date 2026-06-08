@@ -21,6 +21,7 @@ pub(crate) struct FetchCounters {
     skipped_rejected: AtomicI64,
     dedup_eligible: AtomicI64,
     dedup_checked: AtomicI64,
+    new_post_ids: Mutex<Vec<i64>>,
     errors: Mutex<Vec<String>>,
 }
 
@@ -36,6 +37,7 @@ impl FetchCounters {
             skipped_rejected: AtomicI64::new(0),
             dedup_eligible: AtomicI64::new(0),
             dedup_checked: AtomicI64::new(0),
+            new_post_ids: Mutex::new(Vec::new()),
             errors: Mutex::new(Vec::new()),
         }
     }
@@ -285,6 +287,37 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
     })
     .await;
 
+    if ai_duplicate_enabled && !state.fetch_runtime.is_cancel_requested() {
+        let new_post_ids = counters
+            .new_post_ids
+            .lock()
+            .map(|ids| ids.clone())
+            .unwrap_or_default();
+        match dedup_pipeline::sweep_new_posts_for_duplicates(
+            &state,
+            &settings,
+            &new_post_ids,
+            Some(Arc::new({
+                let state = state.clone();
+                move || state.fetch_runtime.is_cancel_requested()
+            })),
+        )
+        .await
+        {
+            Ok(removed) => {
+                if removed > 0 {
+                    counters
+                        .skipped_duplicates
+                        .fetch_add(removed as i64, Ordering::Relaxed);
+                    counters
+                        .new_posts
+                        .fetch_sub(removed as i64, Ordering::Relaxed);
+                }
+            }
+            Err(e) => counters.push_error(format!("Повторная проверка дублей: {e}")),
+        }
+    }
+
     state.db.set_last_fetch_at()?;
 
     if auto_ai {
@@ -419,6 +452,9 @@ async fn process_item(
     ) {
         Ok(Some(post_id)) => {
             counters.new_posts.fetch_add(1, Ordering::Relaxed);
+            if let Ok(mut ids) = counters.new_post_ids.lock() {
+                ids.push(post_id);
+            }
             if auto_ai {
                 counters.ai_queued.fetch_add(1, Ordering::Relaxed);
             } else if settings.auto_approve {

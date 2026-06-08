@@ -134,6 +134,7 @@ pub async fn compare_news_pair(
 pub struct AiDuplicateMatch {
     pub kept_post_id: i64,
     pub kept_title: String,
+    pub match_rank: (u32, u32, u32),
     pub analysis: DuplicateAiAnalysis,
 }
 
@@ -243,13 +244,21 @@ pub async fn find_ai_duplicate_among_posts(
             }
 
             if let Ok(mut guard) = best_match.lock() {
+                let family = crate::services::duplicate::dedup_encoder_family(&dedup_model_id);
+                let rank = crate::services::duplicate::duplicate_match_rank_for_family(
+                    family,
+                    &title,
+                    &raw_title,
+                    analysis.confidence,
+                );
                 let replace = guard
                     .as_ref()
-                    .map_or(true, |existing| analysis.confidence > existing.analysis.confidence);
+                    .map_or(true, |existing| rank > existing.match_rank);
                 if replace {
                     *guard = Some(AiDuplicateMatch {
                         kept_post_id: post_id,
                         kept_title,
+                        match_rank: rank,
                         analysis,
                     });
                 }
