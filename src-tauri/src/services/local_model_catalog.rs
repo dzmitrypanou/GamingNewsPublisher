@@ -46,6 +46,7 @@ pub struct ModelDefinition {
     pub deprecated_reason: Option<String>,
     pub is_custom: bool,
     pub model_kind: ModelKind,
+    pub embed_pooling: Option<String>,
 }
 
 struct BuiltinModelDefinition {
@@ -61,6 +62,7 @@ struct BuiltinModelDefinition {
     recommended: bool,
     deprecated_reason: Option<&'static str>,
     model_kind: ModelKind,
+    embed_pooling: Option<&'static str>,
 }
 
 impl BuiltinModelDefinition {
@@ -79,6 +81,7 @@ impl BuiltinModelDefinition {
             deprecated_reason: self.deprecated_reason.map(String::from),
             is_custom: false,
             model_kind: self.model_kind.clone(),
+            embed_pooling: self.embed_pooling.map(String::from),
         }
     }
 }
@@ -88,7 +91,7 @@ fn llm_catalog() -> &'static [BuiltinModelDefinition] {
         BuiltinModelDefinition {
             id: "vikhr-nemo-12b-instruct",
             name: "Vikhr-Nemo 12B Instruct",
-            description: "Vikhrmodels/Vikhr-Nemo-12B-Instruct · русская LLM для генерации и проверки дублей (~7 ГБ Q4, 12+ ГБ VRAM или гибрид)",
+            description: "Vikhrmodels/Vikhr-Nemo-12B-Instruct · русская LLM для генерации (~7 ГБ Q4, 12+ ГБ VRAM или гибрид)",
             filename: "Vikhr-Nemo-12B-Instruct-R-21-09-24-Q4_K_M.gguf",
             download_url: "https://huggingface.co/bartowski/Vikhr-Nemo-12B-Instruct-R-21-09-24-GGUF/resolve/main/Vikhr-Nemo-12B-Instruct-R-21-09-24-Q4_K_M.gguf",
             size_hint_bytes: 7_477_218_976,
@@ -98,6 +101,7 @@ fn llm_catalog() -> &'static [BuiltinModelDefinition] {
             recommended: true,
             deprecated_reason: None,
             model_kind: ModelKind::Llm,
+            embed_pooling: None,
         },
         BuiltinModelDefinition {
             id: "qwen2.5-14b-instruct",
@@ -112,60 +116,37 @@ fn llm_catalog() -> &'static [BuiltinModelDefinition] {
             recommended: false,
             deprecated_reason: None,
             model_kind: ModelKind::Llm,
-        },
-        BuiltinModelDefinition {
-            id: "llama-3.1-8b-instruct",
-            name: "Llama 3.1 8B Instruct",
-            description: "meta-llama/Llama-3.1-8B-Instruct",
-            filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-            download_url: "https://huggingface.co/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-            size_hint_bytes: 4_920_739_232,
-            expected_sha256: Some(
-                "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c",
-            ),
-            min_vram_gb: 8,
-            layer_count_hint: 32,
-            recommended: false,
-            deprecated_reason: Some("Снята с рекомендаций: слабее для русских новостей"),
-            model_kind: ModelKind::Llm,
-        },
-        BuiltinModelDefinition {
-            id: "mistral-7b-v0.3",
-            name: "Mistral 7B Instruct v0.3",
-            description: "Mistral 7B Instruct v0.3",
-            filename: "Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
-            download_url: "https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
-            size_hint_bytes: 4_372_812_000,
-            expected_sha256: None,
-            min_vram_gb: 6,
-            layer_count_hint: 32,
-            recommended: false,
-            deprecated_reason: Some("Снята с рекомендаций: слабее для русских новостей"),
-            model_kind: ModelKind::Llm,
-        },
-        BuiltinModelDefinition {
-            id: "deepseek-r1-7b",
-            name: "DeepSeek R1 7B",
-            description: "Reasoning-модель",
-            filename: "deepseek-r1-7b-q4_k_m.gguf",
-            download_url: "https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf",
-            size_hint_bytes: 4_683_073_504,
-            expected_sha256: None,
-            min_vram_gb: 6,
-            layer_count_hint: 28,
-            recommended: false,
-            deprecated_reason: Some("Reasoning-модель: медленная, часто ломает JSON"),
-            model_kind: ModelKind::Llm,
+            embed_pooling: None,
         },
     ]
 }
 
-fn builtin_catalog() -> impl Iterator<Item = &'static BuiltinModelDefinition> {
-    llm_catalog().iter()
+fn encoder_catalog() -> &'static [BuiltinModelDefinition] {
+    &[
+        BuiltinModelDefinition {
+            id: "multilingual-e5-base",
+            name: "Multilingual E5 Base",
+            description: "intfloat/multilingual-e5-base · энкодер для дублей, 100+ языков (~220 МБ Q4)",
+            filename: "multilingual-e5-base-q4_k_m.gguf",
+            download_url: "https://huggingface.co/jeremyys/multilingual-e5-base-Q4_K_M-GGUF/resolve/main/multilingual-e5-base-q4_k_m.gguf",
+            size_hint_bytes: 219_152_384,
+            expected_sha256: None,
+            min_vram_gb: 2,
+            layer_count_hint: 12,
+            recommended: true,
+            deprecated_reason: None,
+            model_kind: ModelKind::Encoder,
+            embed_pooling: Some("mean"),
+        },
+    ]
+}
+
+fn all_builtin_catalog() -> impl Iterator<Item = &'static BuiltinModelDefinition> {
+    llm_catalog().iter().chain(encoder_catalog().iter())
 }
 
 pub fn all_models() -> Vec<ModelDefinition> {
-    let mut models: Vec<ModelDefinition> = builtin_catalog()
+    let mut models: Vec<ModelDefinition> = all_builtin_catalog()
         .map(|m| m.to_definition())
         .collect();
     if let Ok(custom) = custom_model_store::load_all() {
@@ -182,7 +163,7 @@ pub fn catalog() -> Vec<ModelDefinition> {
 
 pub fn find(id: &str) -> Option<ModelDefinition> {
     let normalized = normalize_model_id(id);
-    builtin_catalog()
+    all_builtin_catalog()
         .find(|m| m.id == normalized)
         .map(|m| m.to_definition())
         .or_else(|| {
@@ -201,17 +182,34 @@ pub fn find_by_filename(filename: &str) -> Option<ModelDefinition> {
 }
 
 pub fn normalize_model_id(id: &str) -> &str {
-    match id {
-        "deepseek-r1-7b-q4" => "deepseek-r1-7b",
-        other => other,
-    }
+    id
 }
 
-pub fn llm_model_selectable(id: &str) -> bool {
+pub fn is_llm_model(id: &str) -> bool {
+    find(id).is_some_and(|def| def.model_kind == ModelKind::Llm)
+}
+
+pub fn is_encoder_model(id: &str) -> bool {
+    find(id).is_some_and(|def| def.model_kind == ModelKind::Encoder)
+}
+
+pub fn generation_model_selectable(id: &str) -> bool {
     let id = normalize_model_id(id);
     find(id).is_some_and(|def| {
         def.model_kind == ModelKind::Llm && def.deprecated_reason.is_none()
     })
+}
+
+pub fn dedup_model_selectable(id: &str) -> bool {
+    let id = normalize_model_id(id);
+    find(id).is_some_and(|def| {
+        matches!(def.model_kind, ModelKind::Llm | ModelKind::Encoder)
+            && def.deprecated_reason.is_none()
+    })
+}
+
+pub fn llm_model_selectable(id: &str) -> bool {
+    generation_model_selectable(id)
 }
 
 pub fn default_model_id() -> &'static str {
@@ -219,7 +217,7 @@ pub fn default_model_id() -> &'static str {
 }
 
 pub fn default_dedup_model_id() -> &'static str {
-    default_model_id()
+    "multilingual-e5-base"
 }
 
 pub fn resolve_ngl(device: &str, gpu_layers: u32) -> u32 {

@@ -1,3 +1,4 @@
+use crate::local_embed_runtime::LocalEmbedRuntime;
 use crate::local_llm_runtime::{LocalLlmRuntime, snapshot_progress_pct};
 use crate::models::{LocalModelInfo, LocalModelsOverview};
 use crate::services::{llm_dir, local_model_catalog, settings_store};
@@ -17,12 +18,12 @@ pub fn build_overview(app: &AppHandle, runtime: &LocalLlmRuntime) -> LocalModels
 pub fn build_overview_with_embed(
     app: &AppHandle,
     runtime: &LocalLlmRuntime,
-    _embed_runtime: Option<&crate::local_embed_runtime::LocalEmbedRuntime>,
+    embed_runtime: Option<&LocalEmbedRuntime>,
     embed_error: Option<String>,
 ) -> LocalModelsOverview {
     let settings = settings_store::load_settings(app).unwrap_or_default();
     let active_id = settings.normalized_local_model_id();
-    let active_dedup_id = active_id.clone();
+    let active_dedup_id = settings.normalized_local_dedup_model_id();
     let downloads = runtime.downloads.lock().unwrap();
     let server_snapshot = downloads.server_snapshot();
     let server_downloading = server_snapshot.is_some();
@@ -80,7 +81,7 @@ pub fn build_overview_with_embed(
                 download_error,
                 is_custom: def.is_custom,
                 model_kind: def.model_kind.as_str().to_string(),
-                is_active_dedup: settings.duplicate_uses_local() && def.id == active_id,
+                is_active_dedup: settings.duplicate_uses_local() && def.id == active_dedup_id,
             }
         })
         .collect();
@@ -92,26 +93,45 @@ pub fn build_overview_with_embed(
         .find(|m| m.downloading)
         .map(|m| m.id.clone());
 
-    let files_ready = llm_dir::files_ready(&active_id);
-    let ready = runtime.is_ready(&settings);
-    let dedup_ready = if settings.duplicate_uses_local() {
-        files_ready && ready
+    let gen_files_ready = llm_dir::files_ready(&active_id);
+    let ready = if settings.generation_uses_local() {
+        runtime.is_ready(&settings)
     } else {
         true
     };
 
-    let runtime_error = if files_ready && !ready && settings.local_llm_needed() {
+    let dedup_ready = if !settings.duplicate_uses_local() {
+        true
+    } else if settings.duplicate_uses_embeddings() {
+        embed_runtime
+            .map(|rt| rt.is_ready(&active_dedup_id))
+            .unwrap_or(false)
+    } else {
+        runtime.is_ready_for_model(&settings, &active_dedup_id)
+    };
+
+    let runtime_error = if settings.generation_uses_local() && gen_files_ready && !ready {
         runtime.last_start_error()
-    } else if llm_dir::model_file_invalid(&active_id) {
+    } else if settings.generation_uses_local() && llm_dir::model_file_invalid(&active_id) {
         Some("Файл модели повреждён или неполный. Удалите и скачайте заново.".into())
     } else {
         None
     };
 
-    let dedup_runtime_error = if settings.duplicate_uses_local() && files_ready && !dedup_ready {
-        runtime.last_start_error().or(embed_error)
-    } else if settings.duplicate_uses_local() && llm_dir::model_file_invalid(&active_id) {
-        Some("Файл модели повреждён — удалите и скачайте заново.".into())
+    let dedup_runtime_error = if !settings.duplicate_uses_local() {
+        None
+    } else if settings.duplicate_uses_embeddings() {
+        if llm_dir::model_file_invalid(&active_dedup_id) {
+            Some("Файл модели дедупа повреждён — удалите и скачайте заново.".into())
+        } else if !dedup_ready {
+            embed_error.or_else(|| embed_runtime.and_then(|rt| rt.last_start_error()))
+        } else {
+            None
+        }
+    } else if llm_dir::model_file_invalid(&active_dedup_id) {
+        Some("Файл модели дедупа повреждён — удалите и скачайте заново.".into())
+    } else if !dedup_ready {
+        runtime.last_start_error()
     } else {
         None
     };

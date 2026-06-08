@@ -121,8 +121,20 @@ async fn do_fetch_inner(state: Arc<AppState>) -> Result<FetchResult> {
     purge_puzzle_hints_from_queue(&state);
 
     if ai_duplicate_enabled && settings.duplicate_uses_local() {
-        if let Err(e) = state.local_llm.ensure_running(&settings).await {
-            counters.push_error(format!("LLM для дублей: {e}"));
+        if settings.duplicate_uses_embeddings() {
+            let dedup_id = settings.normalized_local_dedup_model_id();
+            if let Err(e) = state.local_embed.ensure_running(&settings, &dedup_id).await {
+                counters.push_error(format!("Энкодер для дублей: {e}"));
+            }
+        } else {
+            let dedup_id = settings.normalized_local_dedup_model_id();
+            if let Err(e) = state
+                .local_llm
+                .ensure_running_for_model(&settings, &dedup_id)
+                .await
+            {
+                counters.push_error(format!("LLM для дублей: {e}"));
+            }
         }
     }
 

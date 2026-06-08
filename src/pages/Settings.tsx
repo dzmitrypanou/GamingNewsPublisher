@@ -31,6 +31,7 @@ import {
   addCustomLocalModel,
   removeCustomLocalModel,
   setLocalModel,
+  setLocalDedupModel,
 } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { dialog } from "@/lib/dialog";
@@ -66,7 +67,7 @@ const defaultSettings: AppSettings = {
   ai_generation_provider: "local",
   ai_duplicate_provider: "local",
   local_model_id: "vikhr-nemo-12b-instruct",
-  local_dedup_model_id: "vikhr-nemo-12b-instruct",
+  local_dedup_model_id: "multilingual-e5-base",
   local_llm_device: "gpu",
   local_llm_gpu_layers: 28,
   ai_prompt_template: DEFAULT_PROMPT,
@@ -220,10 +221,20 @@ export function Settings() {
   }, []);
 
   const activeModel = localLlm?.models.find((m) => m.is_active);
+  const activeDedupModel = localLlm?.models.find((m) => m.is_active_dedup);
   const llmModels = useMemo(
     () =>
       (localLlm?.models ?? []).filter(
         (m) => m.model_kind === "llm" && !m.deprecated_reason
+      ),
+    [localLlm?.models]
+  );
+  const dedupModels = useMemo(
+    () =>
+      (localLlm?.models ?? []).filter(
+        (m) =>
+          !m.deprecated_reason &&
+          (m.model_kind === "llm" || m.model_kind === "encoder")
       ),
     [localLlm?.models]
   );
@@ -266,23 +277,25 @@ export function Settings() {
     if (!localLlm?.server_installed) {
       return { label: "llama-server не установлен", ok: false };
     }
-    const active = llmModels.find((m) => m.is_active);
+    const active = activeDedupModel ?? dedupModels.find((m) => m.id === settings.local_dedup_model_id);
     if (!active?.installed) {
       return {
-        label: "LLM не установлена",
+        label: "Модель дублей не установлена",
         ok: false,
-        detail: activeModel?.name ?? settings.local_model_id,
+        detail: active?.name ?? settings.local_dedup_model_id,
       };
     }
+    const mode =
+      active.model_kind === "encoder" ? "энкодер · cosine" : "LLM-сравнение";
     if (localLlm.dedup_ready) {
       return {
         label: "Готово",
         ok: true,
-        detail: `${active.name} · LLM-сравнение`,
+        detail: `${active.name} · ${mode}`,
       };
     }
     return {
-      label: "LLM не запущена",
+      label: active.model_kind === "encoder" ? "Энкодер не запущен" : "LLM не запущена",
       ok: false,
       error: localLlm.dedup_runtime_error,
     };
@@ -315,6 +328,15 @@ export function Settings() {
     try {
       await setLocalModel(modelId);
       update("local_model_id", modelId);
+      await getLocalModelsOverview().then(setLocalLlm);
+    } catch (e) {
+      await dialog.alert(String(e), { title: "Ошибка", variant: "error" });
+    }
+  };
+
+  const handleSelectDedupModel = async (modelId: string) => {
+    try {
+      await setLocalDedupModel(modelId);
       update("local_dedup_model_id", modelId);
       await getLocalModelsOverview().then(setLocalLlm);
     } catch (e) {
@@ -436,14 +458,29 @@ export function Settings() {
     return "размер неизвестен";
   };
 
-  const renderModelCard = (model: LocalModelInfo) => {
-    const peers = llmModels;
-    const isActive = model.is_active;
+  const renderModelCard = (
+    model: LocalModelInfo,
+    role: "generation" | "dedup"
+  ) => {
+    const peers =
+      role === "generation"
+        ? llmModels
+        : dedupModels.filter((m) =>
+            model.model_kind === "encoder"
+              ? m.model_kind === "encoder"
+              : m.model_kind === "llm"
+          );
+    const isActive =
+      role === "generation" ? model.is_active : model.is_active_dedup;
     const otherInstalled = peers.filter((m) => m.installed && m.id !== model.id);
+    const roleNeeded =
+      role === "generation"
+        ? settings.ai_generation_provider === "local"
+        : settings.ai_duplicate_provider === "local";
     const canDelete =
       model.installed &&
       !model.downloading &&
-      (!isActive || otherInstalled.length > 0);
+      (!isActive || !roleNeeded || otherInstalled.length > 0);
     const canRemoveCustom =
       model.is_custom &&
       !model.installed &&
@@ -456,7 +493,9 @@ export function Settings() {
       !isActive &&
       !model.downloading &&
       !model.deprecated_reason &&
-      model.model_kind === "llm";
+      (role === "generation"
+        ? model.model_kind === "llm"
+        : model.model_kind === "llm" || model.model_kind === "encoder");
 
     return (
       <div
@@ -473,7 +512,12 @@ export function Settings() {
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             {isActive && (
-              <span className="text-xs text-primary">Активна</span>
+              <span className="text-xs text-primary">
+                {role === "generation" ? "Активна" : "Активна для дублей"}
+              </span>
+            )}
+            {model.model_kind === "encoder" && (
+              <span className="text-xs text-warning">Только дубли</span>
             )}
             {model.recommended && (
               <span className="text-xs text-success">Рекомендуется</span>
@@ -494,7 +538,9 @@ export function Settings() {
 
         {isActive && model.installed && !model.downloading && (
           <div className="mt-2 rounded-md border border-border bg-background/40 px-2 py-1.5">
-            {renderRuntimeStatus(generationRuntimeStatus())}
+            {renderRuntimeStatus(
+              role === "generation" ? generationRuntimeStatus() : dedupRuntimeStatus()
+            )}
           </div>
         )}
 
@@ -588,7 +634,11 @@ export function Settings() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => void handleSelectModel(model.id)}
+              onClick={() =>
+                void (role === "generation"
+                  ? handleSelectModel(model.id)
+                  : handleSelectDedupModel(model.id))
+              }
             >
               Выбрать
             </Button>
@@ -622,9 +672,13 @@ export function Settings() {
               Удалить
             </Button>
           )}
-          {model.installed && isActive && !model.downloading && otherInstalled.length === 0 && (
+          {model.installed &&
+            isActive &&
+            !model.downloading &&
+            roleNeeded &&
+            otherInstalled.length === 0 && (
             <span className="text-xs text-muted-foreground">
-              Чтобы удалить — сначала скачайте другую модель
+              Чтобы удалить — сначала скачайте другую модель для этой роли
             </span>
           )}
         </div>
@@ -1198,7 +1252,9 @@ export function Settings() {
                   {settings.ai_duplicate_provider === "off"
                     ? "Выберите провайдера для проверки дублей выше."
                     : settings.ai_duplicate_provider === "local"
-                      ? `URL и заголовки — по всей базе; LLM сравнивает до ${settings.ai_duplicate_llm_top_k} кандидатов (до ${Math.min(settings.ai_dedup_concurrency, 2)} параллельно).`
+                      ? activeDedupModel?.model_kind === "encoder"
+                        ? `URL и заголовки — по всей базе; энкодер сравнивает до ${Math.max(settings.ai_duplicate_llm_top_k, 50)} кандидатов (текст + заголовки, порог 88% или 82%+схожие заголовки).`
+                        : `URL и заголовки — по всей базе; LLM сравнивает до ${Math.max(settings.ai_duplicate_llm_top_k, 50)} кандидатов (до ${Math.min(settings.ai_dedup_concurrency, 2)} параллельно).`
                       : "URL и заголовки — по всей базе; LLM — до top-K кандидатов через облачный API."}
                 </p>
                 {settings.ai_duplicate_provider === "cloud" && !settings.deepseek_api_key && (
@@ -1968,7 +2024,7 @@ export function Settings() {
           <CardHeader className={PANEL_HEADER}>
             <CardTitle className="text-base">Локальные модели</CardTitle>
             <CardDescription className="text-xs">
-              Vikhr-Nemo 12B или Qwen2.5 14B · генерация и дубли · app/llm/models/
+              Генерация и дубли — отдельные модели · app/llm/models/
             </CardDescription>
           </CardHeader>
           <CardContent className={PANEL_CONTENT}>
@@ -1976,8 +2032,16 @@ export function Settings() {
               {settings.ai_generation_provider === "local" &&
                 renderRuntimePanel("Генерация (LLM)", generationRuntimeStatus())}
               {settings.ai_duplicate_provider === "local" &&
-                renderRuntimePanel("Дубли (LLM)", dedupRuntimeStatus())}
+                renderRuntimePanel("Дубли", dedupRuntimeStatus())}
             </div>
+            {settings.ai_generation_provider === "local" &&
+              settings.ai_duplicate_provider === "local" &&
+              settings.local_model_id !== settings.local_dedup_model_id && (
+                <p className="text-xs text-muted-foreground">
+                  Для дублей выбран другой LLM — при проверке llama-server переключится на
+                  модель дублей. Энкодер (E5) работает параллельно с генерацией.
+                </p>
+              )}
 
             {localLlm?.error && !localLlm.server_downloading && (
               <p className="text-xs text-destructive">{localLlm.error}</p>
@@ -2133,9 +2197,17 @@ export function Settings() {
                               )}
                             </div>
 
-              {llmModels.length > 0 && (
+              {settings.ai_generation_provider === "local" && llmModels.length > 0 && (
                 <div className="space-y-2">
-                  {llmModels.map((m) => renderModelCard(m))}
+                  <p className="text-xs font-medium text-muted-foreground">Генерация (LLM)</p>
+                  {llmModels.map((m) => renderModelCard(m, "generation"))}
+                </div>
+              )}
+
+              {settings.ai_duplicate_provider === "local" && dedupModels.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Дубли</p>
+                  {dedupModels.map((m) => renderModelCard(m, "dedup"))}
                 </div>
               )}
             </div>

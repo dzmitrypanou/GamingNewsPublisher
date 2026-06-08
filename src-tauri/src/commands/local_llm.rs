@@ -5,14 +5,30 @@ use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
-pub fn get_local_models_overview(
+pub async fn get_local_models_overview(
     state: State<'_, Arc<AppState>>,
 ) -> Result<LocalModelsOverview, String> {
+    let settings =
+        settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+
+    if settings.local_embed_needed() {
+        let dedup_id = settings.normalized_local_dedup_model_id();
+        if state.local_embed.is_files_ready(&dedup_id)
+            && !state.local_embed.is_ready(&dedup_id)
+        {
+            let _ = state
+                .local_embed
+                .start(&settings, &dedup_id)
+                .await
+                .map_err(|e| e.to_string());
+        }
+    }
+
     Ok(local_llm_overview::build_overview_with_embed(
         &state.app_handle,
         &state.local_llm,
         Some(&state.local_embed),
-        None,
+        state.local_embed.last_start_error(),
     ))
 }
 
@@ -90,6 +106,9 @@ pub async fn delete_local_model(
 ) -> Result<(), String> {
     let settings =
         settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+    let was_active_dedup_encoder = settings.duplicate_uses_embeddings()
+        && settings.normalized_local_dedup_model_id() == model_id;
+
     let restart_settings = local_llm_download::delete_local_model(
         &state.app_handle,
         &state.local_llm,
@@ -97,13 +116,41 @@ pub async fn delete_local_model(
         &model_id,
     )
     .map_err(|e| e.to_string())?;
+
+    if was_active_dedup_encoder {
+        state.local_embed.stop();
+    }
     if let Some(new_settings) = restart_settings {
-        if new_settings.local_llm_needed()
+        if new_settings.generation_uses_local()
             && crate::services::llm_dir::files_ready(&new_settings.normalized_local_model_id())
         {
             state
                 .local_llm
                 .start(&new_settings)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        if new_settings.duplicate_uses_embeddings()
+            && crate::services::llm_dir::files_ready(&new_settings.normalized_local_dedup_model_id())
+        {
+            state
+                .local_embed
+                .start(
+                    &new_settings,
+                    &new_settings.normalized_local_dedup_model_id(),
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        } else if new_settings.duplicate_uses_llm()
+            && crate::services::llm_dir::files_ready(&new_settings.normalized_local_dedup_model_id())
+            && !new_settings.generation_uses_local()
+        {
+            state
+                .local_llm
+                .start_for_model(
+                    &new_settings,
+                    &new_settings.normalized_local_dedup_model_id(),
+                )
                 .await
                 .map_err(|e| e.to_string())?;
         }
@@ -123,9 +170,9 @@ pub async fn set_local_model(
     }
     let def = crate::services::local_model_catalog::find(&model_id).unwrap();
     if def.model_kind.uses_embeddings() {
-        return Err("Энкодеры больше не используются — дубли проверяет LLM".into());
+        return Err("Энкодеры нельзя использовать для генерации".into());
     }
-    if !crate::services::local_model_catalog::llm_model_selectable(&model_id) {
+    if !crate::services::local_model_catalog::generation_model_selectable(&model_id) {
         return Err(
             def.deprecated_reason
                 .clone()
@@ -137,11 +184,10 @@ pub async fn set_local_model(
     }
 
     settings.local_model_id = model_id.clone();
-    settings.local_dedup_model_id = model_id;
     settings_store::save_settings(&state.app_handle, &settings).map_err(|e| e.to_string())?;
 
     state.local_llm.shutdown();
-    if settings.local_llm_needed() {
+    if settings.generation_uses_local() {
         state
             .local_llm
             .start(&settings)
@@ -157,7 +203,47 @@ pub async fn set_local_dedup_model(
     state: State<'_, Arc<AppState>>,
     model_id: String,
 ) -> Result<(), String> {
-    set_local_model(state, model_id).await
+    let mut settings =
+        settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+    if crate::services::local_model_catalog::find(&model_id).is_none() {
+        return Err("Unknown model".into());
+    }
+    let def = crate::services::local_model_catalog::find(&model_id).unwrap();
+    if !crate::services::local_model_catalog::dedup_model_selectable(&model_id) {
+        return Err(
+            def.deprecated_reason
+                .clone()
+                .unwrap_or_else(|| "Модель снята с поддержки".into()),
+        );
+    }
+    if !crate::services::llm_dir::model_installed(&model_id) {
+        return Err("Model not installed".into());
+    }
+
+    settings.local_dedup_model_id = model_id.clone();
+    settings_store::save_settings(&state.app_handle, &settings).map_err(|e| e.to_string())?;
+
+    if def.model_kind.uses_embeddings() {
+        state.local_embed.stop();
+        if settings.duplicate_uses_local() {
+            state
+                .local_embed
+                .start(&settings, &model_id)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    } else {
+        state.local_llm.shutdown();
+        if settings.duplicate_uses_llm() {
+            state
+                .local_llm
+                .start_for_model(&settings, &model_id)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -219,8 +305,8 @@ pub fn remove_custom_local_model(
 
 // Backward compat for old frontend calls
 #[tauri::command]
-pub fn get_local_llm_status(
+pub async fn get_local_llm_status(
     state: State<'_, Arc<AppState>>,
 ) -> Result<LocalModelsOverview, String> {
-    get_local_models_overview(state)
+    get_local_models_overview(state).await
 }

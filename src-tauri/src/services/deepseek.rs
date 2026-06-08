@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::Client;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -88,8 +87,11 @@ pub async fn compare_news_pair(
         .await;
     }
 
-    if settings.duplicate_uses_local() {
-        let _ = local_llm.ensure_running(settings).await;
+    if settings.duplicate_uses_local() && settings.duplicate_uses_llm() {
+        let dedup_id = settings.normalized_local_dedup_model_id();
+        let _ = local_llm
+            .ensure_running_for_model(settings, &dedup_id)
+            .await;
     }
 
     let desc_a = truncate_for_ai(description_a);
@@ -152,10 +154,12 @@ pub async fn find_ai_duplicate_among_posts(
 
     let dedup_concurrency = dedup_concurrency.clamp(1, 10);
 
-    let found = Arc::new(AtomicBool::new(false));
-    let result: Arc<Mutex<Option<AiDuplicateMatch>>> = Arc::new(Mutex::new(None));
+    let best_match: Arc<Mutex<Option<AiDuplicateMatch>>> = Arc::new(Mutex::new(None));
     let semaphore = Arc::new(Semaphore::new(dedup_concurrency));
     let mut tasks = JoinSet::new();
+
+    let use_embeddings = settings.duplicate_uses_local() && settings.duplicate_uses_embeddings();
+    let dedup_model_id = settings.normalized_local_dedup_model_id();
 
     for post in posts {
         let kept_title = post.ai_title.as_deref().unwrap_or(&post.raw_title).to_string();
@@ -165,21 +169,22 @@ pub async fn find_ai_duplicate_among_posts(
             .unwrap_or(&post.raw_description)
             .to_string();
         let post_id = post.id;
+        let raw_title = post.raw_title.clone();
+        let raw_description = post.raw_description.clone();
+        let ai_title = post.ai_title.clone();
+        let ai_text = post.ai_text.clone();
         let client = client.clone();
         let settings = settings.clone();
         let title = title.to_string();
         let description = description.to_string();
-        let found = found.clone();
-        let result = result.clone();
+        let best_match = best_match.clone();
         let semaphore = semaphore.clone();
         let local_llm = local_llm.clone();
         let local_embed = local_embed.clone();
         let should_cancel = should_cancel.clone();
+        let dedup_model_id = dedup_model_id.clone();
 
         tasks.spawn(async move {
-            if found.load(Ordering::Relaxed) {
-                return;
-            }
             if should_cancel.as_ref().is_some_and(|f| f()) {
                 return;
             }
@@ -189,28 +194,55 @@ pub async fn find_ai_duplicate_among_posts(
                 Err(_) => return,
             };
 
-            if found.load(Ordering::Relaxed) || should_cancel.as_ref().is_some_and(|f| f()) {
+            if should_cancel.as_ref().is_some_and(|f| f()) {
                 return;
             }
 
-            let analysis = match compare_news_pair(
-                &client,
-                &settings,
-                &local_llm,
-                &local_embed,
-                &title,
-                &description,
-                &kept_title,
-                &kept_description,
-            )
-            .await
-            {
-                Ok(a) => a,
-                Err(_) => return,
+            let analysis = if use_embeddings {
+                match crate::services::embedding_dedup::compare_news_to_kept_post_embeddings(
+                    &client,
+                    &settings,
+                    &local_embed,
+                    &dedup_model_id,
+                    &title,
+                    &description,
+                    &raw_title,
+                    &raw_description,
+                    ai_title.as_deref(),
+                    ai_text.as_deref(),
+                )
+                .await
+                {
+                    Ok(a) => a,
+                    Err(_) => return,
+                }
+            } else {
+                match compare_news_pair(
+                    &client,
+                    &settings,
+                    &local_llm,
+                    &local_embed,
+                    &title,
+                    &description,
+                    &kept_title,
+                    &kept_description,
+                )
+                .await
+                {
+                    Ok(a) => a,
+                    Err(_) => return,
+                }
             };
 
-            if analysis.is_duplicate && !found.swap(true, Ordering::SeqCst) {
-                if let Ok(mut guard) = result.lock() {
+            if !analysis.is_duplicate {
+                return;
+            }
+
+            if let Ok(mut guard) = best_match.lock() {
+                let replace = guard
+                    .as_ref()
+                    .map_or(true, |existing| analysis.confidence > existing.analysis.confidence);
+                if replace {
                     *guard = Some(AiDuplicateMatch {
                         kept_post_id: post_id,
                         kept_title,
@@ -223,7 +255,7 @@ pub async fn find_ai_duplicate_among_posts(
 
     let poll_cancel = should_cancel.clone();
     loop {
-        if found.load(Ordering::Relaxed) || poll_cancel.as_ref().is_some_and(|f| f()) {
+        if poll_cancel.as_ref().is_some_and(|f| f()) {
             tasks.abort_all();
             while tasks.join_next().await.is_some() {}
             break;
@@ -240,7 +272,7 @@ pub async fn find_ai_duplicate_among_posts(
         }
     }
 
-    Ok(result.lock().ok().and_then(|g| g.clone()))
+    Ok(best_match.lock().ok().and_then(|g| g.clone()))
 }
 
 pub async fn process_news(

@@ -223,6 +223,7 @@ pub fn start_model_download(app: AppHandle, runtime: Arc<LocalLlmRuntime>, model
                 }
                 emit_progress(&app, &runtime);
                 maybe_start_active_llm(&app, &runtime).await;
+                maybe_start_active_embed(&app, &runtime).await;
             }
             Err(e) if e.to_string() == "cancelled" => {
                 if let Ok(mut guard) = runtime.downloads.lock() {
@@ -279,7 +280,7 @@ pub fn cancel_server_download(app: &AppHandle, runtime: &LocalLlmRuntime) -> boo
 
 async fn maybe_start_active_llm(app: &AppHandle, runtime: &LocalLlmRuntime) {
     if let Ok(settings) = crate::services::settings_store::load_settings(app) {
-        if settings.local_llm_needed()
+        if settings.local_generation_needed()
             && llm_dir::files_ready(&settings.normalized_local_model_id())
             && !runtime.is_server_running()
         {
@@ -287,6 +288,25 @@ async fn maybe_start_active_llm(app: &AppHandle, runtime: &LocalLlmRuntime) {
                 eprintln!("Local LLM start after download: {}", e);
             }
             emit_progress(app, runtime);
+        }
+    }
+}
+
+async fn maybe_start_active_embed(app: &AppHandle, runtime: &LocalLlmRuntime) {
+    let Some(state) = app.try_state::<Arc<AppState>>() else {
+        return;
+    };
+    if let Ok(settings) = crate::services::settings_store::load_settings(app) {
+        if settings.local_embed_needed() {
+            let dedup_id = settings.normalized_local_dedup_model_id();
+            if state.local_embed.is_files_ready(&dedup_id)
+                && !state.local_embed.is_ready(&dedup_id)
+            {
+                if let Err(e) = state.local_embed.start(&settings, &dedup_id).await {
+                    eprintln!("Local embed start after download: {}", e);
+                }
+                emit_progress(app, runtime);
+            }
         }
     }
 }
@@ -367,18 +387,27 @@ pub fn delete_local_model(
 
     let active = settings.normalized_local_model_id();
     let active_dedup = settings.normalized_local_dedup_model_id();
-    let deleting_active =
-        active == model_id || active_dedup == model_id;
+    let deleting_active_gen = active == model_id;
+    let deleting_active_dedup = active_dedup == model_id;
 
-    if deleting_active {
-        let others: Vec<_> = llm_dir::installed_model_ids()
+    if deleting_active_gen && settings.generation_uses_local() {
+        let has_other_gen = llm_dir::installed_model_ids()
             .into_iter()
-            .filter(|id| id != model_id)
-            .collect();
-        if others.is_empty() {
-            anyhow::bail!("Нельзя удалить единственную установленную модель");
+            .any(|id| id != model_id && local_model_catalog::generation_model_selectable(&id));
+        if !has_other_gen {
+            anyhow::bail!("Нельзя удалить единственную модель для генерации");
         }
-        if deleting_active {
+        runtime.shutdown();
+    }
+
+    if deleting_active_dedup && settings.duplicate_uses_local() {
+        let has_other_dedup = llm_dir::installed_model_ids()
+            .into_iter()
+            .any(|id| id != model_id && local_model_catalog::dedup_model_selectable(&id));
+        if !has_other_dedup {
+            anyhow::bail!("Нельзя удалить единственную модель для дублей");
+        }
+        if settings.duplicate_uses_llm() {
             runtime.shutdown();
         }
     }
@@ -397,23 +426,28 @@ pub fn delete_local_model(
         let _ = crate::services::custom_model_store::remove(model_id);
     }
 
-    let restart_settings = if deleting_active {
-        let next_id = llm_dir::installed_model_ids()
+    let mut new_settings = settings.clone();
+    let mut changed = false;
+
+    if deleting_active_gen && settings.generation_uses_local() {
+        let next_gen = llm_dir::installed_model_ids()
             .into_iter()
-            .find(|id| {
-                id != model_id
-                    && local_model_catalog::find(id)
-                        .is_some_and(|_| local_model_catalog::llm_model_selectable(id))
-            })
-            .or_else(|| {
-                llm_dir::installed_model_ids()
-                    .into_iter()
-                    .find(|id| id != model_id)
-            })
-            .context("No other installed model")?;
-        let mut new_settings = settings.clone();
-        new_settings.local_model_id = next_id.clone();
-        new_settings.local_dedup_model_id = next_id;
+            .find(|id| id != model_id && local_model_catalog::generation_model_selectable(id))
+            .context("No other generation model")?;
+        new_settings.local_model_id = next_gen;
+        changed = true;
+    }
+
+    if deleting_active_dedup && settings.duplicate_uses_local() {
+        let next_dedup = llm_dir::installed_model_ids()
+            .into_iter()
+            .find(|id| id != model_id && local_model_catalog::dedup_model_selectable(id))
+            .context("No other dedup model")?;
+        new_settings.local_dedup_model_id = next_dedup;
+        changed = true;
+    }
+
+    let restart_settings = if changed {
         crate::services::settings_store::save_settings(app, &new_settings)?;
         Some(new_settings)
     } else {

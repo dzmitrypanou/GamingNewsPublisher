@@ -92,6 +92,8 @@ pub fn get_automation_status(
         ai_uses_local: settings.local_llm_needed(),
         ai_generation_uses_local: settings.generation_uses_local(),
         ai_duplicate_uses_local: settings.duplicate_uses_local(),
+        ai_duplicate_uses_embeddings: settings.duplicate_uses_embeddings(),
+        active_dedup_model_name: settings.effective_duplicate_model(),
         ai_duplicate_check_enabled: settings.ai_duplicate_check,
         fetch_dedup_checked: fetch_snapshot.as_ref().map(|r| r.dedup_checked).unwrap_or(0),
         fetch_dedup_total: fetch_snapshot.as_ref().map(|r| r.dedup_eligible).unwrap_or(0),

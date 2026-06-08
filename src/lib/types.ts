@@ -218,6 +218,8 @@ export interface AutomationStatus {
   ai_uses_local: boolean;
   ai_generation_uses_local: boolean;
   ai_duplicate_uses_local: boolean;
+  ai_duplicate_uses_embeddings: boolean;
+  active_dedup_model_name: string;
   ai_duplicate_check_enabled: boolean;
   fetch_dedup_checked: number;
   fetch_dedup_total: number;

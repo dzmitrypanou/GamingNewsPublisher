@@ -6,7 +6,7 @@ use tauri_plugin_store::StoreExt;
 
 fn resolve_active_model_id(model_id: &str) -> String {
     let id = local_model_catalog::normalize_model_id(model_id);
-    if local_model_catalog::llm_model_selectable(id) && llm_dir::model_installed(id) {
+    if local_model_catalog::generation_model_selectable(id) && llm_dir::model_installed(id) {
         return id.to_string();
     }
     let default = local_model_catalog::default_model_id();
@@ -15,7 +15,22 @@ fn resolve_active_model_id(model_id: &str) -> String {
     }
     llm_dir::installed_model_ids()
         .into_iter()
-        .find(|installed| local_model_catalog::llm_model_selectable(installed))
+        .find(|installed| local_model_catalog::generation_model_selectable(installed))
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn resolve_active_dedup_model_id(model_id: &str) -> String {
+    let id = local_model_catalog::normalize_model_id(model_id);
+    if local_model_catalog::dedup_model_selectable(id) && llm_dir::model_installed(id) {
+        return id.to_string();
+    }
+    let default = local_model_catalog::default_dedup_model_id();
+    if llm_dir::model_installed(default) {
+        return default.to_string();
+    }
+    llm_dir::installed_model_ids()
+        .into_iter()
+        .find(|installed| local_model_catalog::dedup_model_selectable(installed))
         .unwrap_or_else(|| default.to_string())
 }
 
@@ -398,16 +413,18 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             }
         },
     };
-    let loaded_id = settings.local_model_id.clone();
-    let resolved_id = resolve_active_model_id(&loaded_id);
+    let loaded_gen_id = settings.local_model_id.clone();
+    let loaded_dedup_id = settings.local_dedup_model_id.clone();
+    let resolved_gen_id = resolve_active_model_id(&loaded_gen_id);
+    let resolved_dedup_id = resolve_active_dedup_model_id(&loaded_dedup_id);
     let mut settings = settings;
     let mut needs_save = false;
-    if resolved_id != loaded_id {
-        settings.local_model_id = resolved_id;
+    if resolved_gen_id != loaded_gen_id {
+        settings.local_model_id = resolved_gen_id;
         needs_save = true;
     }
-    if settings.local_dedup_model_id != settings.local_model_id {
-        settings.local_dedup_model_id = settings.local_model_id.clone();
+    if resolved_dedup_id != loaded_dedup_id {
+        settings.local_dedup_model_id = resolved_dedup_id;
         needs_save = true;
     }
     if needs_save {

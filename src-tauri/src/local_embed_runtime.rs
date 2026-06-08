@@ -127,8 +127,11 @@ impl LocalEmbedRuntime {
             .arg("512")
             .arg("-ngl")
             .arg(ngl.to_string())
-            .arg("--embedding")
-            .stdin(Stdio::null())
+            .arg("--embedding");
+        if let Some(pooling) = def.embed_pooling.as_deref() {
+            cmd.arg("--pooling").arg(pooling);
+        }
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_file));
 

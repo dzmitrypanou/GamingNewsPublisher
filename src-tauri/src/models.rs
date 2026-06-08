@@ -172,7 +172,7 @@ impl AppSettings {
     }
 
     pub fn local_llm_needed(&self) -> bool {
-        self.local_generation_needed() || self.duplicate_uses_local()
+        self.local_generation_needed() || self.duplicate_uses_llm()
     }
 
     pub fn normalized_local_model_id(&self) -> String {
@@ -180,15 +180,26 @@ impl AppSettings {
     }
 
     pub fn normalized_local_dedup_model_id(&self) -> String {
-        self.normalized_local_model_id()
+        crate::services::local_model_catalog::normalize_model_id(&self.local_dedup_model_id)
+            .to_string()
     }
 
     pub fn duplicate_uses_embeddings(&self) -> bool {
-        false
+        self.duplicate_uses_local()
+            && crate::services::local_model_catalog::is_encoder_model(
+                &self.normalized_local_dedup_model_id(),
+            )
+    }
+
+    pub fn duplicate_uses_llm(&self) -> bool {
+        self.duplicate_uses_local()
+            && crate::services::local_model_catalog::is_llm_model(
+                &self.normalized_local_dedup_model_id(),
+            )
     }
 
     pub fn local_embed_needed(&self) -> bool {
-        false
+        self.duplicate_uses_embeddings()
     }
 
     pub fn local_generation_needed(&self) -> bool {
@@ -211,9 +222,9 @@ impl AppSettings {
 
     pub fn effective_duplicate_model(&self) -> String {
         if self.duplicate_uses_local() {
-            crate::services::local_model_catalog::find(&self.normalized_local_model_id())
+            crate::services::local_model_catalog::find(&self.normalized_local_dedup_model_id())
                 .map(|m| m.name.to_string())
-                .unwrap_or_else(|| self.normalized_local_model_id())
+                .unwrap_or_else(|| self.normalized_local_dedup_model_id())
         } else {
             self.deepseek_model.clone()
         }
@@ -341,6 +352,8 @@ pub struct AutomationStatus {
     pub ai_uses_local: bool,
     pub ai_generation_uses_local: bool,
     pub ai_duplicate_uses_local: bool,
+    pub ai_duplicate_uses_embeddings: bool,
+    pub active_dedup_model_name: String,
     pub ai_duplicate_check_enabled: bool,
     pub fetch_dedup_checked: i64,
     pub fetch_dedup_total: i64,

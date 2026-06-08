@@ -25,10 +25,19 @@ fn is_configured_for(
     task: AiTask,
     settings: &AppSettings,
     local_llm: &LocalLlmRuntime,
-    _local_embed: &LocalEmbedRuntime,
+    local_embed: &LocalEmbedRuntime,
 ) -> bool {
     match provider_for(task, settings) {
-        "local" => local_llm.is_files_ready(settings),
+        "local" => match task {
+            AiTask::Generation => local_llm.is_files_ready(settings),
+            AiTask::Duplicate => {
+                if settings.duplicate_uses_embeddings() {
+                    local_embed.is_files_ready(&settings.normalized_local_dedup_model_id())
+                } else {
+                    local_llm.is_files_ready_for(&settings.normalized_local_dedup_model_id())
+                }
+            }
+        },
         "cloud" => !settings.deepseek_api_key.is_empty(),
         _ => false,
     }
@@ -38,10 +47,22 @@ fn is_available_for(
     task: AiTask,
     settings: &AppSettings,
     local_llm: &LocalLlmRuntime,
-    _local_embed: &LocalEmbedRuntime,
+    local_embed: &LocalEmbedRuntime,
 ) -> bool {
     match provider_for(task, settings) {
-        "local" => local_llm.is_ready(settings),
+        "local" => match task {
+            AiTask::Generation => local_llm.is_ready(settings),
+            AiTask::Duplicate => {
+                if settings.duplicate_uses_embeddings() {
+                    local_embed.is_ready(&settings.normalized_local_dedup_model_id())
+                } else {
+                    local_llm.is_ready_for_model(
+                        settings,
+                        &settings.normalized_local_dedup_model_id(),
+                    )
+                }
+            }
+        },
         "cloud" => !settings.deepseek_api_key.is_empty(),
         _ => false,
     }

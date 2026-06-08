@@ -56,6 +56,7 @@ impl CustomModelRecord {
             deprecated_reason: None,
             is_custom: true,
             model_kind: ModelKind::Llm,
+            embed_pooling: None,
         }
     }
 }

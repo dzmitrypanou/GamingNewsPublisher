@@ -78,11 +78,10 @@ pub async fn check_duplicate(
         return Ok(None);
     }
 
-    // Tier 2 + 4 prep: heuristic hits always go to LLM; fill remaining slots up to top-K
+    // Tier 2 + 4 prep: heuristic hits always go to AI; fill remaining slots up to top-K.
+    // Scanning hundreds of posts with embeddings causes false positives (~0.77 generic score).
     let mut top_k = settings.ai_duplicate_llm_top_k as usize;
-    if settings.duplicate_uses_cloud() {
-        top_k = top_k.max(50);
-    }
+    top_k = top_k.max(50);
     top_k = top_k.min(settings.ai_duplicate_check_limit as usize);
     let llm_candidates = rank_for_llm(title, description, &candidates, top_k);
 
@@ -91,16 +90,30 @@ pub async fn check_duplicate(
     }
 
     if settings.duplicate_uses_local() {
-        if let Err(e) = state
-            .local_llm
-            .ensure_running(settings)
-            .await
-        {
-            anyhow::bail!("LLM для дублей: {e}");
+        if settings.duplicate_uses_embeddings() {
+            let dedup_id = settings.normalized_local_dedup_model_id();
+            if let Err(e) = state
+                .local_embed
+                .ensure_running(settings, &dedup_id)
+                .await
+            {
+                anyhow::bail!("Энкодер для дублей: {e}");
+            }
+        } else {
+            let dedup_id = settings.normalized_local_dedup_model_id();
+            if let Err(e) = state
+                .local_llm
+                .ensure_running_for_model(settings, &dedup_id)
+                .await
+            {
+                anyhow::bail!("LLM для дублей: {e}");
+            }
         }
     }
 
-    let dedup_concurrency = if settings.duplicate_uses_local() {
+    let dedup_concurrency = if settings.duplicate_uses_embeddings() {
+        settings.ai_dedup_concurrency.clamp(1, 10) as usize
+    } else if settings.duplicate_uses_local() {
         settings.ai_dedup_concurrency.clamp(1, 2) as usize
     } else {
         settings.ai_dedup_concurrency.clamp(1, 10) as usize

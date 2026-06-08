@@ -368,10 +368,12 @@ impl LocalLlmRuntime {
 
 
 
+    pub fn is_files_ready_for(&self, model_id: &str) -> bool {
+        llm_dir::files_ready(model_id)
+    }
+
     pub fn is_files_ready(&self, settings: &AppSettings) -> bool {
-
-        llm_dir::files_ready(&settings.normalized_local_model_id())
-
+        self.is_files_ready_for(&settings.normalized_local_model_id())
     }
 
 
@@ -384,10 +386,14 @@ impl LocalLlmRuntime {
 
 
 
+    pub fn is_ready_for_model(&self, settings: &AppSettings, model_id: &str) -> bool {
+        self.is_files_ready_for(model_id)
+            && self.is_server_running()
+            && self.config_matches_model(settings, model_id)
+    }
+
     pub fn is_ready(&self, settings: &AppSettings) -> bool {
-
-        self.is_files_ready(settings) && self.is_server_running()
-
+        self.is_ready_for_model(settings, &settings.normalized_local_model_id())
     }
 
 
@@ -446,71 +452,49 @@ impl LocalLlmRuntime {
 
 
 
-    fn config_matches(&self, settings: &AppSettings) -> bool {
-
+    fn config_matches_model(&self, settings: &AppSettings, model_id: &str) -> bool {
         let Ok(guard) = self.loaded.lock() else {
-
             return false;
-
         };
-
         guard.as_ref().is_some_and(|loaded| {
-
-            loaded.model_id == settings.normalized_local_model_id()
-
+            loaded.model_id == model_id
                 && loaded.device == settings.local_llm_device
-
                 && loaded.gpu_layers == settings.local_llm_gpu_layers
-
         })
+    }
 
+    fn config_matches(&self, settings: &AppSettings) -> bool {
+        self.config_matches_model(settings, &settings.normalized_local_model_id())
     }
 
 
 
     pub async fn start(&self, settings: &AppSettings) -> Result<()> {
+        self.start_for_model(settings, &settings.normalized_local_model_id())
+            .await
+    }
 
-        if !self.is_files_ready(settings) {
-
-            let model_id = settings.normalized_local_model_id();
-
-            if llm_dir::model_file_invalid(&model_id) {
-
+    pub async fn start_for_model(&self, settings: &AppSettings, model_id: &str) -> Result<()> {
+        if !self.is_files_ready_for(model_id) {
+            if llm_dir::model_file_invalid(model_id) {
                 anyhow::bail!(
-
                     "Файл модели повреждён или неполный. Удалите её и скачайте заново."
-
                 );
-
             }
-
             anyhow::bail!("Local LLM files not installed");
-
         }
 
-
-
-        if self.is_server_running() && self.config_matches(settings) {
-
+        if self.is_server_running() && self.config_matches_model(settings, model_id) {
             self.set_start_error(None);
-
             return Ok(());
-
         }
 
-
-
-        self.stop_for_install();
-
+        self.stop();
         tokio::time::sleep(Duration::from_millis(400)).await;
-
-
-
-        let model_id = settings.normalized_local_model_id();
 
         let server = llm_dir::server_path()?;
 
-        let model = llm_dir::model_path_for(&model_id)?;
+        let model = llm_dir::model_path_for(model_id)?;
 
         let bin_dir = llm_dir::bin_dir()?;
 
@@ -581,26 +565,17 @@ impl LocalLlmRuntime {
         *self.child.lock().unwrap() = Some(child);
 
         *self.loaded.lock().unwrap() = Some(LoadedConfig {
-
-            model_id,
-
+            model_id: model_id.to_string(),
             device: settings.local_llm_device.clone(),
-
             gpu_layers: settings.local_llm_gpu_layers,
-
         });
 
-
-
-        let attempts = startup_wait_attempts(&settings.normalized_local_model_id());
+        let attempts = startup_wait_attempts(model_id);
 
         for _ in 0..attempts {
-
             if let Some(message) = self.child_exit_message() {
-
                 self.stop();
-
-                let hint = startup_failure_hint(&settings.normalized_local_model_id(), &settings);
+                let hint = startup_failure_hint(model_id, settings);
 
                 self.set_start_error(Some(format!("{message}{hint}")));
 
@@ -638,28 +613,26 @@ impl LocalLlmRuntime {
 
         };
 
-        let hint = startup_failure_hint(&settings.normalized_local_model_id(), settings);
-
+        let hint = startup_failure_hint(model_id, settings);
         let full = format!("{message}{hint}");
-
         self.set_start_error(Some(full.clone()));
-
         anyhow::bail!(full)
-
     }
 
-
-
     pub async fn ensure_running(&self, settings: &AppSettings) -> Result<()> {
+        self.ensure_running_for_model(settings, &settings.normalized_local_model_id())
+            .await
+    }
 
-        if self.is_server_running() && self.config_matches(settings) {
-
+    pub async fn ensure_running_for_model(
+        &self,
+        settings: &AppSettings,
+        model_id: &str,
+    ) -> Result<()> {
+        if self.is_server_running() && self.config_matches_model(settings, model_id) {
             return Ok(());
-
         }
-
-        self.start(settings).await
-
+        self.start_for_model(settings, model_id).await
     }
 
 

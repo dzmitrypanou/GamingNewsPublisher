@@ -521,7 +521,9 @@ export function Dashboard() {
                         : "генерация: API",
                       automation?.ai_duplicate_check_enabled
                         ? automation?.ai_duplicate_uses_local
-                          ? "дубли: локально"
+                          ? automation.ai_duplicate_uses_embeddings
+                            ? `дубли: ${automation.active_dedup_model_name} (энкодер)`
+                            : `дубли: ${automation.active_dedup_model_name}`
                           : "дубли: API"
                         : null,
                       (automation?.ai_processing_count ?? 0) > 0
