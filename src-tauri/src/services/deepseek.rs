@@ -348,13 +348,115 @@ fn parse_duplicate_analysis(content: &str) -> Result<DuplicateAiAnalysis> {
 fn parse_ai_response(content: &str) -> Result<AiResponse> {
     let json_str = strip_code_fence(content);
     if let Ok(parsed) = serde_json::from_str::<AiResponse>(json_str) {
-        return Ok(parsed);
+        return Ok(normalize_ai_response(parsed));
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+        if let Some(parsed) = ai_response_from_value(&value) {
+            return Ok(parsed);
+        }
     }
     if let Some(parsed) = extract_ai_response_loose(json_str) {
         return Ok(parsed);
     }
-    serde_json::from_str(json_str)
-        .context(format!("Failed to parse AI JSON: {}", preview_for_error(json_str)))
+    Err(anyhow::anyhow!(
+        "Failed to parse AI JSON: {}",
+        preview_for_error(json_str)
+    ))
+}
+
+fn normalize_ai_response(mut response: AiResponse) -> AiResponse {
+    response.title = response.title.trim().to_string();
+    response.text = response.text.trim().to_string();
+    if response.title.is_empty() && !response.text.is_empty() {
+        response.title = derive_title_from_text(&response.text);
+    }
+    if response.text.is_empty() && !response.title.is_empty() {
+        response.text = response.title.clone();
+    }
+    response
+}
+
+fn ai_response_from_value(value: &serde_json::Value) -> Option<AiResponse> {
+    let title = value
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let text = value
+        .get("text")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let hashtags = value
+        .get("hashtags")
+        .map(parse_hashtags_value)
+        .unwrap_or_default();
+
+    match (title, text) {
+        (Some(title), Some(text)) => Some(normalize_ai_response(AiResponse {
+            title,
+            text,
+            hashtags,
+        })),
+        (None, Some(text)) => Some(normalize_ai_response(AiResponse {
+            title: String::new(),
+            text,
+            hashtags,
+        })),
+        (Some(title), None) => Some(normalize_ai_response(AiResponse {
+            title: title.clone(),
+            text: title,
+            hashtags,
+        })),
+        (None, None) => None,
+    }
+}
+
+fn parse_hashtags_value(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .collect(),
+        serde_json::Value::String(raw) => raw
+            .split_whitespace()
+            .filter(|part| !part.is_empty())
+            .map(str::to_string)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn derive_title_from_text(text: &str) -> String {
+    let compact: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.is_empty() {
+        return String::new();
+    }
+
+    let end = compact
+        .find(|c| matches!(c, '.' | '!' | '?'))
+        .map(|idx| idx + 1)
+        .unwrap_or(compact.len());
+    let sentence = compact[..end].trim();
+    truncate_chars(
+        if sentence.is_empty() {
+            compact.as_str()
+        } else {
+            sentence
+        },
+        80,
+    )
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut out: String = value.chars().take(max_chars.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }
 
 static TITLE_FIELD_RE: Lazy<Regex> =
@@ -369,20 +471,39 @@ fn extract_ai_response_loose(json_str: &str) -> Option<AiResponse> {
     let title = TITLE_FIELD_RE
         .captures(json_str)
         .and_then(|c| c.get(1))
-        .map(|m| unescape_json_string(m.as_str()))?;
+        .map(|m| unescape_json_string(m.as_str()))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let text = TEXT_FIELD_RE
         .captures(json_str)
         .and_then(|c| c.get(1))
-        .map(|m| unescape_json_string(m.as_str()))?;
-    if title.trim().is_empty() && text.trim().is_empty() {
-        return None;
-    }
+        .map(|m| unescape_json_string(m.as_str()))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
     let hashtags = HASHTAGS_FIELD_RE
         .captures(json_str)
         .and_then(|c| c.get(1))
         .and_then(|m| serde_json::from_str::<Vec<String>>(m.as_str()).ok())
         .unwrap_or_default();
-    Some(AiResponse { title, text, hashtags })
+
+    match (title, text) {
+        (Some(title), Some(text)) => Some(normalize_ai_response(AiResponse {
+            title,
+            text,
+            hashtags,
+        })),
+        (None, Some(text)) => Some(normalize_ai_response(AiResponse {
+            title: String::new(),
+            text,
+            hashtags,
+        })),
+        (Some(title), None) => Some(normalize_ai_response(AiResponse {
+            title: title.clone(),
+            text: title,
+            hashtags,
+        })),
+        (None, None) => None,
+    }
 }
 
 fn unescape_json_string(value: &str) -> String {
@@ -443,4 +564,21 @@ pub fn format_hashtags(tags: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ai_response_accepts_text_only_json() {
+        let raw = r#"{"text": "Внимание, геймеры! Свежая новость: разработчики анонсировали крупное обновление."}"#;
+        let parsed = parse_ai_response(raw).expect("text-only json should parse");
+        assert!(parsed.title.contains("Внимание, геймеры"));
+        assert_eq!(
+            parsed.text,
+            "Внимание, геймеры! Свежая новость: разработчики анонсировали крупное обновление."
+        );
+        assert!(parsed.hashtags.is_empty());
+    }
 }
