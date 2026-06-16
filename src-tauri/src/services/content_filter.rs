@@ -22,7 +22,6 @@ const NAV_BOILERPLATE_MARKERS: &[&str] = &[
     "sign up for quanta",
 ];
 
-/// Daily puzzle / word-game spoilers (hints, answers, solutions).
 const DAILY_PUZZLE_GAMES: &[&str] = &[
     "contexto",
     "wordle",
@@ -64,7 +63,6 @@ static ANSWER_WORD: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\banswers?\b").e
 static SOLUTION_WORD: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\bsolutions?\b").expect("solution word"));
 
-/// Title or URL looks like a daily puzzle hints/answers post (Contexto, Wordle, etc.).
 pub fn is_hints_or_puzzle_answer_content(title: &str, link: &str) -> bool {
     let title_lower = title.to_ascii_lowercase();
     let url_lower = link.to_ascii_lowercase();
@@ -103,7 +101,6 @@ pub fn is_hints_or_puzzle_answer_content(title: &str, link: &str) -> bool {
         || combined.contains("today-")
 }
 
-/// RSS category or URL/type that is not a regular news article.
 pub fn is_excluded_rss_category(categories: &[String]) -> bool {
     categories.iter().any(|category| {
         EXCLUDED_RSS_CATEGORIES
@@ -112,7 +109,6 @@ pub fn is_excluded_rss_category(categories: &[String]) -> bool {
     })
 }
 
-/// Parsed text looks like site navigation instead of article body.
 pub fn is_navigation_boilerplate(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {

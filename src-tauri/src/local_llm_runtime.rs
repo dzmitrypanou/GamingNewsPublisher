@@ -18,11 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use std::time::Duration;
 
-
-
 pub const LOCAL_LLM_PORT: u16 = 18765;
-
-
 
 #[derive(Debug, Clone, Default)]
 
@@ -38,8 +34,6 @@ pub struct DownloadSnapshot {
 
 }
 
-
-
 struct ActiveDownload {
 
     snapshot: DownloadSnapshot,
@@ -47,8 +41,6 @@ struct ActiveDownload {
     cancel: Arc<AtomicBool>,
 
 }
-
-
 
 #[derive(Default)]
 
@@ -59,8 +51,6 @@ pub struct DownloadRegistry {
     models: HashMap<String, ActiveDownload>,
 
 }
-
-
 
 impl DownloadRegistry {
 
@@ -91,8 +81,6 @@ impl DownloadRegistry {
         Some(cancel)
 
     }
-
-
 
     pub fn try_start_model(&mut self, model_id: &str) -> Option<Arc<AtomicBool>> {
 
@@ -128,8 +116,6 @@ impl DownloadRegistry {
 
     }
 
-
-
     pub fn update_server(&mut self, snapshot: DownloadSnapshot) {
 
         if let Some(entry) = &mut self.server {
@@ -140,8 +126,6 @@ impl DownloadRegistry {
 
     }
 
-
-
     pub fn update_model(&mut self, model_id: &str, snapshot: DownloadSnapshot) {
 
         if let Some(entry) = self.models.get_mut(model_id) {
@@ -151,8 +135,6 @@ impl DownloadRegistry {
         }
 
     }
-
-
 
     pub fn set_server_error(&mut self, error: String) {
 
@@ -166,8 +148,6 @@ impl DownloadRegistry {
 
     }
 
-
-
     pub fn set_model_error(&mut self, model_id: &str, error: String) {
 
         if let Some(entry) = self.models.get_mut(model_id) {
@@ -180,23 +160,17 @@ impl DownloadRegistry {
 
     }
 
-
-
     pub fn finish_server(&mut self) {
 
         self.server = None;
 
     }
 
-
-
     pub fn finish_model(&mut self, model_id: &str) {
 
         self.models.remove(model_id);
 
     }
-
-
 
     pub fn cancel_server(&mut self) -> bool {
 
@@ -214,8 +188,6 @@ impl DownloadRegistry {
 
     }
 
-
-
     pub fn cancel_model(&mut self, model_id: &str) -> bool {
 
         if let Some(entry) = self.models.get(model_id) {
@@ -232,15 +204,11 @@ impl DownloadRegistry {
 
     }
 
-
-
     pub fn server_snapshot(&self) -> Option<DownloadSnapshot> {
 
         self.server.as_ref().map(|e| e.snapshot.clone())
 
     }
-
-
 
     pub fn model_snapshot(&self, model_id: &str) -> Option<DownloadSnapshot> {
 
@@ -248,15 +216,11 @@ impl DownloadRegistry {
 
     }
 
-
-
     pub fn any_active(&self) -> bool {
 
         self.server.is_some() || !self.models.is_empty()
 
     }
-
-
 
     pub fn is_model_active(&self, model_id: &str) -> bool {
 
@@ -265,8 +229,6 @@ impl DownloadRegistry {
     }
 
 }
-
-
 
 pub fn snapshot_progress_pct(snapshot: &DownloadSnapshot) -> f64 {
 
@@ -282,8 +244,6 @@ pub fn snapshot_progress_pct(snapshot: &DownloadSnapshot) -> f64 {
 
 }
 
-
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 
 struct LoadedConfig {
@@ -295,8 +255,6 @@ struct LoadedConfig {
     gpu_layers: u32,
 
 }
-
-
 
 pub struct LocalLlmRuntime {
 
@@ -313,8 +271,6 @@ pub struct LocalLlmRuntime {
     server_install: Arc<tokio::sync::Mutex<()>>,
 
 }
-
-
 
 impl LocalLlmRuntime {
 
@@ -338,23 +294,17 @@ impl LocalLlmRuntime {
 
     }
 
-
-
     pub fn server_install_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
 
         self.server_install.clone()
 
     }
 
-
-
     pub fn last_start_error(&self) -> Option<String> {
 
         self.last_start_error.lock().ok().and_then(|g| g.clone())
 
     }
-
-
 
     fn set_start_error(&self, message: Option<String>) {
 
@@ -366,8 +316,6 @@ impl LocalLlmRuntime {
 
     }
 
-
-
     pub fn is_files_ready_for(&self, model_id: &str) -> bool {
         llm_dir::files_ready(model_id)
     }
@@ -376,15 +324,11 @@ impl LocalLlmRuntime {
         self.is_files_ready_for(&settings.normalized_local_model_id())
     }
 
-
-
     pub fn is_server_running(&self) -> bool {
 
         self.server_ready.load(Ordering::SeqCst)
 
     }
-
-
 
     pub fn is_ready_for_model(&self, settings: &AppSettings, model_id: &str) -> bool {
         self.is_files_ready_for(model_id)
@@ -396,15 +340,11 @@ impl LocalLlmRuntime {
         self.is_ready_for_model(settings, &settings.normalized_local_model_id())
     }
 
-
-
     pub fn chat_completions_url(&self) -> String {
 
         format!("http://127.0.0.1:{}/v1/chat/completions", LOCAL_LLM_PORT)
 
     }
-
-
 
     pub fn stop(&self) {
 
@@ -432,8 +372,6 @@ impl LocalLlmRuntime {
 
     }
 
-
-
     pub fn shutdown(&self) {
 
         self.stop();
@@ -442,15 +380,11 @@ impl LocalLlmRuntime {
 
     }
 
-
-
     pub fn stop_for_install(&self) {
 
         self.shutdown();
 
     }
-
-
 
     fn config_matches_model(&self, settings: &AppSettings, model_id: &str) -> bool {
         let Ok(guard) = self.loaded.lock() else {
@@ -466,8 +400,6 @@ impl LocalLlmRuntime {
     fn config_matches(&self, settings: &AppSettings) -> bool {
         self.config_matches_model(settings, &settings.normalized_local_model_id())
     }
-
-
 
     pub async fn start(&self, settings: &AppSettings) -> Result<()> {
         self.start_for_model(settings, &settings.normalized_local_model_id())
@@ -506,8 +438,6 @@ impl LocalLlmRuntime {
 
             .with_context(|| format!("Cannot create {}", log_path.display()))?;
 
-
-
         let mut cmd = Command::new(&server);
 
         cmd.current_dir(&bin_dir)
@@ -538,8 +468,6 @@ impl LocalLlmRuntime {
 
             .stderr(Stdio::from(stderr_file));
 
-
-
         #[cfg(windows)]
 
         {
@@ -552,15 +480,11 @@ impl LocalLlmRuntime {
 
         }
 
-
-
         let child = cmd
 
             .spawn()
 
             .with_context(|| format!("Failed to start {}", server.display()))?;
-
-
 
         *self.child.lock().unwrap() = Some(child);
 
@@ -597,8 +521,6 @@ impl LocalLlmRuntime {
 
         }
 
-
-
         self.stop();
 
         let log_tail = read_log_tail(&log_path, 400);
@@ -634,8 +556,6 @@ impl LocalLlmRuntime {
         }
         self.start_for_model(settings, model_id).await
     }
-
-
 
     fn child_exit_message(&self) -> Option<String> {
 
@@ -679,8 +599,6 @@ impl LocalLlmRuntime {
 
     }
 
-
-
     async fn health_check_matches_child(&self) -> bool {
 
         if !Self::health_check().await {
@@ -705,8 +623,6 @@ impl LocalLlmRuntime {
 
     }
 
-
-
     async fn health_check() -> bool {
 
         let client = match reqwest::Client::builder()
@@ -722,8 +638,6 @@ impl LocalLlmRuntime {
             Err(_) => return false,
 
         };
-
-
 
         let health_url = format!("http://127.0.0.1:{}/health", LOCAL_LLM_PORT);
 
@@ -745,8 +659,6 @@ impl LocalLlmRuntime {
 
         }
 
-
-
         let models_url = format!("http://127.0.0.1:{}/v1/models", LOCAL_LLM_PORT);
 
         client
@@ -765,8 +677,6 @@ impl LocalLlmRuntime {
 
 }
 
-
-
 impl Drop for LocalLlmRuntime {
 
     fn drop(&mut self) {
@@ -776,8 +686,6 @@ impl Drop for LocalLlmRuntime {
     }
 
 }
-
-
 
 fn startup_wait_attempts(model_id: &str) -> u32 {
 
@@ -792,8 +700,6 @@ fn startup_wait_attempts(model_id: &str) -> u32 {
     (60.0 + size_gb * 30.0).round() as u32
 
 }
-
-
 
 fn startup_failure_hint(model_id: &str, settings: &AppSettings) -> String {
 
@@ -818,8 +724,6 @@ fn startup_failure_hint(model_id: &str, settings: &AppSettings) -> String {
     hints.concat()
 
 }
-
-
 
 fn read_log_tail(path: &std::path::Path, max_chars: usize) -> String {
 
@@ -903,8 +807,6 @@ fn read_log_tail(path: &std::path::Path, max_chars: usize) -> String {
 
 }
 
-
-
 #[cfg(windows)]
 
 fn kill_process_tree(pid: u32) {
@@ -929,13 +831,9 @@ fn kill_process_tree(pid: u32) {
 
 }
 
-
-
 #[cfg(not(windows))]
 
 fn kill_process_tree(_pid: u32) {}
-
-
 
 #[cfg(windows)]
 
@@ -955,10 +853,7 @@ fn kill_orphan_llama_servers() {
 
 }
 
-
-
 #[cfg(not(windows))]
 
 fn kill_orphan_llama_servers() {}
-
 

@@ -72,6 +72,80 @@ pub fn rebuild_pool(
     Ok(())
 }
 
+const PROXY_TEST_ATTEMPTS: usize = 5;
+
+pub async fn test_proxy_from_settings(settings: &AppSettings) -> ApiTestResult {
+    if !settings.proxy_enabled {
+        return ApiTestResult {
+            success: false,
+            message: "Включите прокси в настройках".to_string(),
+        };
+    }
+
+    let scheme = normalize_proxy_type(&settings.proxy_type);
+    let mut attempts = 0usize;
+    let mut last_error = String::new();
+    let mut last_line = String::new();
+
+    for line in settings.proxy_list.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if attempts >= PROXY_TEST_ATTEMPTS {
+            break;
+        }
+        attempts += 1;
+        last_line = line.to_string();
+
+        let url = match parse_proxy_line(line, scheme) {
+            Ok(url) => url,
+            Err(e) => {
+                last_error = e.to_string();
+                continue;
+            }
+        };
+
+        let client = match build_proxied_client(&url) {
+            Ok(client) => client,
+            Err(e) => {
+                last_error = e.to_string();
+                continue;
+            }
+        };
+
+        let result = test_proxy_connection(&client).await;
+        if result.success {
+            return ApiTestResult {
+                success: true,
+                message: format!("{} · {}", result.message, line),
+            };
+        }
+        last_error = result.message;
+    }
+
+    if attempts == 0 {
+        return ApiTestResult {
+            success: false,
+            message: "Список прокси пуст или все строки закомментированы".to_string(),
+        };
+    }
+
+    ApiTestResult {
+        success: false,
+        message: format!(
+            "Не удалось подключиться через {} {}: {}",
+            attempts,
+            proxy_attempt_label(attempts),
+            if last_line.is_empty() {
+                last_error
+            } else {
+                format!("{} · {}", last_error, last_line)
+            }
+        ),
+    }
+}
+
 pub async fn test_proxy_connection(client: &Client) -> ApiTestResult {
     match client
         .get("https://api.ipify.org?format=json")
@@ -99,9 +173,37 @@ pub async fn test_proxy_connection(client: &Client) -> ApiTestResult {
         },
         Err(e) => ApiTestResult {
             success: false,
-            message: format!("Ошибка: {}", e),
+            message: humanize_proxy_error(&e),
         },
     }
+}
+
+fn proxy_attempt_label(count: usize) -> &'static str {
+    if count == 1 {
+        "прокси"
+    } else {
+        "прокси из списка"
+    }
+}
+
+fn humanize_proxy_error(err: &reqwest::Error) -> String {
+    let detail = err.to_string();
+    let lower = detail.to_ascii_lowercase();
+
+    if lower.contains("connection refused") || lower.contains("actively refused") {
+        return "Прокси недоступен (connection refused). Проверьте IP:PORT и что ваш IP добавлен в whitelist".to_string();
+    }
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return "Таймаут подключения к прокси".to_string();
+    }
+    if lower.contains("authentication") || lower.contains("auth") {
+        return "Прокси требует авторизацию. Для привязки по IP логин/пароль не нужны — убедитесь, что ваш IP в whitelist у провайдера".to_string();
+    }
+    if lower.contains("dns error") || lower.contains("failed to lookup") {
+        return "Ошибка DNS. Для SOCKS5 используется socks5h (DNS через прокси)".to_string();
+    }
+
+    format!("Ошибка: {}", detail)
 }
 
 fn build_direct_client() -> Result<Client> {
@@ -112,7 +214,8 @@ fn build_direct_client() -> Result<Client> {
 }
 
 fn build_proxied_client(proxy_url: &str) -> Result<Client> {
-    let proxy = Proxy::all(proxy_url).with_context(|| format!("Некорректный прокси: {}", proxy_url))?;
+    let proxy_url = normalize_proxy_url(proxy_url);
+    let proxy = Proxy::all(&proxy_url).with_context(|| format!("Некорректный прокси: {}", proxy_url))?;
     Client::builder()
         .timeout(HTTP_TIMEOUT)
         .proxy(proxy)
@@ -123,18 +226,19 @@ fn build_proxied_client(proxy_url: &str) -> Result<Client> {
 fn normalize_proxy_type(proxy_type: &str) -> &str {
     match proxy_type.trim().to_lowercase().as_str() {
         "https" => "https",
-        "socks5" | "socks" => "socks5",
+        "socks5" | "socks" | "socks5h" => "socks5h",
         _ => "http",
     }
 }
 
-/// Поддерживаемые форматы (по одному на строку):
-/// - `IP:PORT`
-/// - `IP:PORT@LOGIN:PASS`
-/// - `LOGIN:PASS@IP:PORT`
-/// - `IP:PORT:LOGIN:PASS`
-/// - `LOGIN:PASS:IP:PORT`
-/// - `http(s)://...` / `socks5://...` (схема в строке имеет приоритет над типом в настройках)
+fn normalize_proxy_url(url: &str) -> String {
+    if let Some(rest) = url.strip_prefix("socks5://") {
+        format!("socks5h://{rest}")
+    } else {
+        url.to_string()
+    }
+}
+
 pub fn parse_proxy_line(line: &str, default_scheme: &str) -> Result<String> {
     let line = line.trim();
     if line.is_empty() {
@@ -261,8 +365,20 @@ mod tests {
 
     #[test]
     fn parses_host_port_at_credentials() {
-        let url = parse_proxy_line("10.0.0.2:3128@user:secret", "socks5").unwrap();
-        assert_eq!(url, "socks5://user:secret@10.0.0.2:3128");
+        let url = parse_proxy_line("10.0.0.2:3128@user:secret", "socks5h").unwrap();
+        assert_eq!(url, "socks5h://user:secret@10.0.0.2:3128");
+    }
+
+    #[test]
+    fn upgrades_socks5_to_socks5h() {
+        assert_eq!(
+            normalize_proxy_url("socks5://1.2.3.4:1080"),
+            "socks5h://1.2.3.4:1080"
+        );
+        assert_eq!(
+            normalize_proxy_url("socks5h://1.2.3.4:1080"),
+            "socks5h://1.2.3.4:1080"
+        );
     }
 
     #[test]

@@ -27,7 +27,6 @@ pub fn normalize_description(description: &str) -> String {
     normalize_title(description)
 }
 
-/// Jaccard similarity on significant title words (len >= 3).
 pub fn title_word_jaccard(a: &str, b: &str) -> f64 {
     let norm_a = normalize_title(a);
     let norm_b = normalize_title(b);
@@ -75,7 +74,6 @@ fn distinctive_common_words(a: &str, b: &str) -> usize {
     words_a.intersection(&words_b).count()
 }
 
-/// Jaccard on non-stopword title tokens (blocks franchise-name-only overlap).
 pub fn distinctive_word_jaccard(a: &str, b: &str) -> f64 {
     let words_a = distinctive_word_set(a);
     let words_b = distinctive_word_set(b);
@@ -99,7 +97,6 @@ const FRANCHISE_ANCHOR_WORDS: &[&str] = &[
     "world", "tour", "taxi", "crazy", "war", "gears", "day", "game", "live", "service",
 ];
 
-/// Blocks title-dominant E5-large matches that only share a franchise/product name.
 pub fn has_meaningful_distinctive_overlap(a: &str, b: &str) -> bool {
     let words_a = distinctive_word_set(a);
     let words_b = distinctive_word_set(b);
@@ -156,11 +153,11 @@ fn strongly_similar_for_family(family: DedupEncoderFamily, a: &str, b: &str) -> 
     let common = distinctive_common_words(a, b);
     let jaccard = distinctive_word_jaccard(a, b);
     match family {
-        // Tuned on E5-base false-positive audit (~0.55 blocks franchise-only overlap).
+
         DedupEncoderFamily::E5Base | DedupEncoderFamily::Other => {
             common >= 4 && jaccard >= 0.55
         }
-        // E5-large: 5+ shared tokens, or 4 with high jaccard (blocks franchise-name-only pairs).
+
         DedupEncoderFamily::E5Large => common >= 5 || (common >= 4 && jaccard >= 0.45),
         DedupEncoderFamily::Bge => {
             common >= 5
@@ -173,7 +170,6 @@ const E5_LARGE_MEDIUM_MIN_JACCARD: f64 = 0.35;
 
 const BGE_MEDIUM_MIN_JACCARD: f64 = 0.30;
 
-/// Medium-confidence lexical overlap (e.g. Nintendo Direct rephrases).
 pub fn titles_medium_similar_for_family(
     family: DedupEncoderFamily,
     a: &str,
@@ -197,7 +193,6 @@ pub fn titles_medium_similar_for_family(
     titles_similar(a, b) && common >= 3 && distinctive_word_jaccard(a, b) >= min_jaccard
 }
 
-/// Rank duplicate candidates: lexical strength, shared distinctive words, confidence.
 pub fn duplicate_match_rank_for_family(
     family: DedupEncoderFamily,
     new_title: &str,
@@ -222,7 +217,6 @@ pub fn duplicate_match_rank_for_family(
     )
 }
 
-/// Rank duplicate candidates: lexical strength, shared distinctive words, confidence.
 pub fn duplicate_match_rank(new_title: &str, kept_title: &str, confidence: u32) -> (u32, u32, u32) {
     duplicate_match_rank_for_family(DedupEncoderFamily::E5Base, new_title, kept_title, confidence)
 }
@@ -231,7 +225,6 @@ pub fn titles_strongly_similar_for_family(family: DedupEncoderFamily, a: &str, b
     strongly_similar_for_family(family, a, b)
 }
 
-/// High-confidence headline overlap (e.g. Mario $1bn vs Mario first $1bn film).
 pub fn titles_strongly_similar(a: &str, b: &str) -> bool {
     strongly_similar_for_family(DedupEncoderFamily::E5Base, a, b)
 }
@@ -307,7 +300,6 @@ pub fn content_matches(
     titles_similar(new_title, existing_title) || descriptions_similar(new_desc, existing_desc)
 }
 
-/// Link roundups / digests are not a single news event — skip as dedup reference targets.
 pub fn is_link_roundup_title(title: &str) -> bool {
     let norm = normalize_title(title);
     if norm.is_empty() {

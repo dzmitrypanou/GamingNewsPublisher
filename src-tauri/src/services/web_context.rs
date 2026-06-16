@@ -13,7 +13,7 @@ const ARTICLE_FETCH_TIMEOUT: Duration = Duration::from_secs(90);
 const ARTICLE_ENRICH_TIMEOUT: Duration = Duration::from_secs(15);
 const ARTICLE_FETCH_MAX_BYTES_CONTEXT: usize = 512 * 1024;
 const ARTICLE_FETCH_MAX_BYTES_FULL: usize = 2 * 1024 * 1024;
-/// RSS excerpt with at least this many characters is enough during fetch — skip slow page loads.
+
 const MIN_RSS_ENRICH_CHARS: usize = 80;
 
 #[derive(Debug, Clone, Copy)]

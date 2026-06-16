@@ -303,7 +303,6 @@ pub fn remove_custom_local_model(
     Ok(())
 }
 
-// Backward compat for old frontend calls
 #[tauri::command]
 pub async fn get_local_llm_status(
     state: State<'_, Arc<AppState>>,

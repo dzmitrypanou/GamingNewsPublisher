@@ -40,7 +40,6 @@ pub async fn check_duplicate(
         return Ok(None);
     }
 
-    // Tier 1: exact normalized title match across full history
     if let Ok(exact_matches) = state.db.find_posts_by_normalized_title(title) {
         for post in exact_matches {
             if options.exclude_post_id == Some(post.id) {
@@ -63,7 +62,6 @@ pub async fn check_duplicate(
         return Ok(None);
     }
 
-    // Tier 3: SQL candidates within configured window
     let window_days = Some(settings.ai_duplicate_window_days);
     let limit = settings.ai_duplicate_check_limit as i64;
     let status_filter = options.status_filter.as_deref();
@@ -86,7 +84,6 @@ pub async fn check_duplicate(
     let dedup_family =
         duplicate::dedup_encoder_family(&settings.normalized_local_dedup_model_id());
 
-    // Tier 2: high-confidence lexical headline match (E5-base often scores 0.72–0.75 on these).
     if let Some(lexical) =
         find_lexical_duplicate(title, dedup_family, &candidates, options.exclude_post_id)
     {
@@ -97,8 +94,6 @@ pub async fn check_duplicate(
         return Ok(None);
     }
 
-    // Tier 3 + 4 prep: heuristic hits always go to AI; fill remaining slots up to top-K.
-    // Scanning hundreds of posts with embeddings causes false positives (~0.77 generic score).
     let mut top_k = settings.ai_duplicate_llm_top_k as usize;
     top_k = top_k.max(50);
     top_k = top_k.min(settings.ai_duplicate_check_limit as usize);
@@ -334,7 +329,6 @@ fn heuristic_score(
     score
 }
 
-/// Second pass after parallel ingest: re-check posts inserted in this fetch batch.
 pub async fn sweep_new_posts_for_duplicates(
     state: &AppState,
     settings: &AppSettings,

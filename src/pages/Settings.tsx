@@ -1888,7 +1888,8 @@ export function Settings() {
                     ))}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Для строк без схемы (http://, socks5://) используется выбранный тип
+                    Для строк без схемы используется выбранный тип. SOCKS5 с привязкой по IP —
+                    формат IP:PORT, логин/пароль не нужны
                   </p>
                 </div>
 
@@ -1968,7 +1969,7 @@ export function Settings() {
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Форматы: IP:PORT · IP:PORT@LOGIN:PASS · LOGIN:PASS@IP:PORT ·
-                  IP:PORT:LOGIN:PASS · http(s)://... · socks5://... · строки с # игнорируются
+                  IP:PORT:LOGIN:PASS · http(s):
                 </p>
                 <TestButton
                   platform="proxy"

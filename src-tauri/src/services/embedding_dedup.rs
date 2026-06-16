@@ -104,7 +104,6 @@ pub async fn compare_news_pair_embeddings(
     ))
 }
 
-/// Compare incoming RSS text against both raw and AI-processed variants of a kept post.
 pub async fn compare_news_to_kept_post_embeddings(
     client: &Client,
     settings: &AppSettings,

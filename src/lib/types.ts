@@ -283,7 +283,6 @@ export interface LocalModelsOverview {
   disk_bytes: number;
 }
 
-/** @deprecated use LocalModelsOverview */
 export type LocalLlmStatus = LocalModelsOverview;
 
 export interface ApiTestResult {

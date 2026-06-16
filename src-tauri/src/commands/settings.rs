@@ -66,11 +66,5 @@ pub async fn test_deepseek(state: State<'_, Arc<AppState>>) -> Result<ApiTestRes
 #[tauri::command]
 pub async fn test_proxy(state: State<'_, std::sync::Arc<AppState>>) -> Result<ApiTestResult, String> {
     let settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
-    if !settings.proxy_enabled {
-        return Ok(ApiTestResult {
-            success: false,
-            message: "Включите прокси в настройках".to_string(),
-        });
-    }
-    Ok(proxy::test_proxy_connection(&state.http_client()).await)
+    Ok(proxy::test_proxy_from_settings(&settings).await)
 }

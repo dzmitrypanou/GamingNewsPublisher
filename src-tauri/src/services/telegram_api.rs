@@ -60,7 +60,7 @@ pub async fn publish_post(
         match publish_with_photo(client, settings, chat_id, &truncated, img_url, data_dir).await {
             Ok(id) => return Ok(id),
             Err(_) => {
-                // fallback to message
+
             }
         }
     }

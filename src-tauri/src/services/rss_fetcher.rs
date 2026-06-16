@@ -24,7 +24,6 @@ pub fn site_referer(url: &str) -> Option<String> {
 
 pub fn get_preset_sources() -> Vec<PresetSource> {
     vec![
-        // General Gaming News
         PresetSource {
             name: "IGN".to_string(),
             url: "https://feeds.feedburner.com/ign/all".to_string(),
@@ -55,7 +54,6 @@ pub fn get_preset_sources() -> Vec<PresetSource> {
             category_name: "Инди".to_string(),
             group: "General Gaming News".to_string(),
         },
-        // Industry & Business
         PresetSource {
             name: "GamesIndustry.biz".to_string(),
             url: "https://www.gamesindustry.biz/feed".to_string(),
@@ -68,21 +66,18 @@ pub fn get_preset_sources() -> Vec<PresetSource> {
             category_name: "Анонсы".to_string(),
             group: "Industry & Business".to_string(),
         },
-        // Leaks & Rumors
         PresetSource {
             name: "Insider Gaming".to_string(),
             url: "https://insider-gaming.com/feed/".to_string(),
             category_name: "Анонсы".to_string(),
             group: "Leaks & Rumors".to_string(),
         },
-        // Cybersport
         PresetSource {
             name: "RB.RU Cybersport".to_string(),
             url: "https://rb.ru/feeds/tag/cybersport/".to_string(),
             category_name: "Киберспорт".to_string(),
             group: "Cybersport".to_string(),
         },
-        // Science
         PresetSource {
             name: "Ars Technica".to_string(),
             url: "https://arstechnica.com/feed/".to_string(),
@@ -329,13 +324,10 @@ pub fn clean_html(input: &str) -> String {
     strip_feed_boilerplate(&text)
 }
 
-/// Remove RSS/WordPress attribution footers without altering paragraph breaks.
 pub fn strip_boilerplate(text: &str) -> String {
     strip_feed_boilerplate(text)
 }
 
-/// RSS feeds often end descriptions with `<a href="...">Read more</a>` — tag stripping leaves the link text.
-/// WordPress feeds add "The post … first appeared on …" / "appeared first on …" attribution lines.
 fn strip_feed_boilerplate(text: &str) -> String {
     let mut result = text.trim().to_string();
     if result.is_empty() {
@@ -391,7 +383,6 @@ fn strip_feed_boilerplate(text: &str) -> String {
     result
 }
 
-/// Standalone attribution / footer paragraph — drop when parsing full article text.
 pub fn is_boilerplate_paragraph(text: &str) -> bool {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -407,9 +398,9 @@ pub fn is_boilerplate_paragraph(text: &str) -> bool {
 
 static BOILERPLATE_TAIL_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     [
-        // WordPress: "The post Title first appeared on Site."
+
         r"(?is)\s*the post\b.*?\bfirst appeared on\b.*$",
-        // WordPress: "... appeared first on Site Name ."
+
         r"(?is)\s+(?:\S+\s+)?appeared first on\b.*$",
         r"(?is)\s*\boriginally published (?:on|at|in)\b.*$",
         r"(?is)\s*\bas originally published (?:on|at|in)\b.*$",
@@ -545,7 +536,7 @@ mod tests {
     #[test]
     fn site_referer_extracts_origin() {
         assert_eq!(
-            site_referer("https://www.example.com/article/slug/").as_deref(),
+            site_referer("https:
             Some("https://www.example.com/")
         );
         assert_eq!(
@@ -556,7 +547,7 @@ mod tests {
 
     #[test]
     fn ign_feed_extracts_image_from_content_encoded() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http:
             <channel><item>
                 <title>Warhammer</title>
                 <description></description>
@@ -566,7 +557,7 @@ mod tests {
         let url = extract_image_from_entry(&channel.items()[0]);
         assert_eq!(
             url.as_deref(),
-            Some("https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg")
+            Some("https:
         );
     }
 
@@ -576,19 +567,19 @@ mod tests {
             <rss version="2.0"><channel><item>
                 <title>Sample article</title>
                 <link>https://example.com/article/</link>
-                <enclosure url="https://example.com/uploads/keyart.png" length="6252" type="image/jpeg"/>
+                <enclosure url="https:
             </item></channel></rss>"#;
         let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
         let url = extract_image_from_entry(&channel.items()[0]);
         assert_eq!(
             url.as_deref(),
-            Some("https://example.com/uploads/keyart.png")
+            Some("https:
         );
     }
 
     #[test]
     fn feed_extracts_media_thumbnail() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http:
             <channel><item>
                 <title>Test</title>
                 <media:thumbnail url="https://example.com/uploads/test.jpg" />
@@ -597,13 +588,13 @@ mod tests {
         let url = extract_image_from_entry(&channel.items()[0]);
         assert_eq!(
             url.as_deref(),
-            Some("https://example.com/uploads/test.jpg")
+            Some("https:
         );
     }
 
     #[test]
     fn quanta_feed_extracts_media_content_images() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http:
             <channel><item>
                 <title>WebP item</title>
                 <media:content url="https://example.com/image.webp" type="image/jpg"/>
@@ -613,7 +604,7 @@ mod tests {
             </item></channel></rss>"#;
         let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
         let webp = extract_image_from_entry(&channel.items()[0]);
-        assert_eq!(webp.as_deref(), Some("https://example.com/image.webp"));
+        assert_eq!(webp.as_deref(), Some("https:
         let jpg = extract_image_from_entry(&channel.items()[1]);
         assert_eq!(jpg.as_deref(), Some("https://example.com/image.jpg"));
     }

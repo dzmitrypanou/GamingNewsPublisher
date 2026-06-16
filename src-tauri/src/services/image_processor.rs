@@ -86,8 +86,6 @@ impl Default for PostImageOptions {
     }
 }
 
-// Remove IGN watermark badge on the left edge.
-
 const IGN_LEFT_CROP_FRACTION: f32 = 0.30;
 
 pub fn is_ign_source(source_url: &str, article_url: &str, image_url: Option<&str>) -> bool {
@@ -213,8 +211,7 @@ pub async fn resolve_post_image(
         Ok(local_ref) => Some(local_ref),
         Err(e) => {
             eprintln!("Image normalize {}: {}", url, e);
-            // Do not fall back to og:image here — it would require fetching the article page.
-            // Just keep the original URL (rss thumbnail or previously fetched og:image).
+
             fallback_remote_url(&url)
         }
     }

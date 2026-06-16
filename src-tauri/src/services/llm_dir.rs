@@ -4,8 +4,6 @@ use anyhow::{Context, Result};
 
 use std::path::{Path, PathBuf};
 
-
-
 pub const LLAMA_SERVER_EXE: &str = "llama-server.exe";
 
 pub const LLAMA_DLL: &str = "llama.dll";
@@ -14,7 +12,6 @@ pub const GGML_VULKAN_DLL: &str = "ggml-vulkan.dll";
 
 const MIN_MODEL_BYTES_FALLBACK: u64 = 512 * 1024;
 
-/// Допустимый размер скачанного файла (±2% от size_hint или fallback для неизвестных).
 pub fn is_valid_model_size(model_id: &str, size: u64) -> bool {
     let Some(def) = local_model_catalog::find(model_id) else {
         return size >= MIN_MODEL_BYTES_FALLBACK;
@@ -26,8 +23,6 @@ pub fn is_valid_model_size(model_id: &str, size: u64) -> bool {
     let max = def.size_hint_bytes.saturating_mul(102) / 100;
     size >= min && size <= max
 }
-
-
 
 pub fn llm_root() -> Result<PathBuf> {
 
@@ -47,8 +42,6 @@ pub fn llm_root() -> Result<PathBuf> {
 
 }
 
-
-
 pub fn server_start_log_path() -> Result<PathBuf> {
 
     Ok(llm_root()?.join("last-server-start.log"))
@@ -58,8 +51,6 @@ pub fn server_start_log_path() -> Result<PathBuf> {
 pub fn embed_server_start_log_path() -> Result<PathBuf> {
     Ok(llm_root()?.join("last-embed-server-start.log"))
 }
-
-
 
 pub fn bin_dir() -> Result<PathBuf> {
 
@@ -71,8 +62,6 @@ pub fn bin_dir() -> Result<PathBuf> {
 
 }
 
-
-
 pub fn models_dir() -> Result<PathBuf> {
 
     let dir = llm_root()?.join("models");
@@ -83,15 +72,11 @@ pub fn models_dir() -> Result<PathBuf> {
 
 }
 
-
-
 pub fn server_path() -> Result<PathBuf> {
 
     Ok(bin_dir()?.join(LLAMA_SERVER_EXE))
 
 }
-
-
 
 pub fn model_path_for(model_id: &str) -> Result<PathBuf> {
 
@@ -103,23 +88,17 @@ pub fn model_path_for(model_id: &str) -> Result<PathBuf> {
 
 }
 
-
-
 pub fn partial_path_for(model_id: &str) -> Result<PathBuf> {
 
     Ok(model_path_for(model_id)?.with_extension("gguf.part"))
 
 }
 
-
-
 pub fn download_state_path_for(model_id: &str) -> Result<PathBuf> {
 
     Ok(llm_root()?.join(format!("download_state_{model_id}.json")))
 
 }
-
-
 
 pub fn partial_bytes_for(model_id: &str) -> u64 {
 
@@ -133,15 +112,11 @@ pub fn partial_bytes_for(model_id: &str) -> u64 {
 
 }
 
-
-
 pub fn has_partial_download(model_id: &str) -> bool {
 
     !model_installed(model_id) && partial_bytes_for(model_id) > 1_000_000
 
 }
-
-
 
 pub fn model_file_invalid(model_id: &str) -> bool {
 
@@ -153,15 +128,11 @@ pub fn model_file_invalid(model_id: &str) -> bool {
 
 }
 
-
-
 pub fn install_staging_dir() -> Result<PathBuf> {
 
     Ok(llm_root()?.join(".install-staging"))
 
 }
-
-
 
 pub fn server_installed() -> bool {
 
@@ -183,8 +154,6 @@ pub fn server_installed() -> bool {
 
 }
 
-
-
 pub fn model_installed(model_id: &str) -> bool {
 
     model_path_for(model_id)
@@ -194,8 +163,6 @@ pub fn model_installed(model_id: &str) -> bool {
         .unwrap_or(false)
 
 }
-
-
 
 fn model_file_valid(path: &Path, model_id: &str) -> bool {
 
@@ -217,15 +184,11 @@ fn model_file_valid(path: &Path, model_id: &str) -> bool {
 
 }
 
-
-
 pub fn files_ready(active_model_id: &str) -> bool {
 
     server_installed() && model_installed(active_model_id)
 
 }
-
-
 
 pub fn any_model_installed() -> bool {
 
@@ -236,8 +199,6 @@ pub fn any_model_installed() -> bool {
         .any(|m| model_installed(&m.id))
 
 }
-
-
 
 pub fn installed_model_ids() -> Vec<String> {
 
@@ -253,8 +214,6 @@ pub fn installed_model_ids() -> Vec<String> {
 
 }
 
-
-
 pub fn file_bytes_for_model(model_id: &str) -> u64 {
 
     model_path_for(model_id)
@@ -266,8 +225,6 @@ pub fn file_bytes_for_model(model_id: &str) -> u64 {
         .unwrap_or(0)
 
 }
-
-
 
 pub fn remove_invalid_model_file(model_id: &str) -> Result<bool> {
 
@@ -287,8 +244,6 @@ pub fn remove_invalid_model_file(model_id: &str) -> Result<bool> {
 
 }
 
-
-
 pub fn disk_usage_bytes() -> i64 {
 
     let mut total = 0i64;
@@ -302,8 +257,6 @@ pub fn disk_usage_bytes() -> i64 {
     total
 
 }
-
-
 
 fn dir_size(path: &Path) -> i64 {
 
@@ -334,5 +287,4 @@ fn dir_size(path: &Path) -> i64 {
     total
 
 }
-
 
