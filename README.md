@@ -237,4 +237,8 @@ scripts/
 
 ## License
 
-MIT
+This project is **free to use for any purpose** — personal, commercial, or otherwise. You may copy, modify, and distribute it without payment or permission.
+
+**No attribution required.** You do not need to credit the author.
+
+The software is provided as-is, without warranty. See [LICENSE](LICENSE) for the full legal text (Unlicense / public domain).

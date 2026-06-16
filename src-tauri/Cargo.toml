@@ -3,6 +3,7 @@ name = "gaming-news-publisher"
 version = "0.1.0"
 description = "Gaming News Publisher for VK and Telegram"
 authors = ["you"]
+license = "Unlicense"
 edition = "2021"
 
 [lib]
