@@ -1,6 +1,5 @@
 use crate::models::{ApiTestResult, AppSettings};
 use crate::services::image_loader;
-use crate::services::post_text;
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde_json::Value;
@@ -222,40 +221,6 @@ fn is_scope_error(message: &str) -> bool {
     lower.contains("current scopes") || lower.contains("no access to call")
 }
 
-fn link_attachment(url: Option<&str>) -> Option<String> {
-    let url = url?.trim();
-    if url.starts_with("http://") || url.starts_with("https://") {
-        Some(url.to_string())
-    } else {
-        None
-    }
-}
-
-/// VK 2025: a link in `attachments` requires a photo (`link_photo_sizing_rule`).
-fn build_attachments(photo: Option<String>, link_url: Option<&str>) -> Option<String> {
-    match (photo, link_attachment(link_url)) {
-        (Some(photo), Some(link)) => Some(format!("{photo},{link}")),
-        (Some(photo), None) => Some(photo),
-        (None, Some(_)) => None,
-        (None, None) => None,
-    }
-}
-
-fn append_link_to_message(message: &str, link_url: Option<&str>) -> String {
-    let Some(url) = link_attachment(link_url) else {
-        return message.to_string();
-    };
-    if post_text::contains_url(message) {
-        return message.to_string();
-    }
-    let msg = message.trim();
-    if msg.is_empty() {
-        url
-    } else {
-        format!("{msg}\n\n{url}")
-    }
-}
-
 const PERM_PHOTOS: u64 = 4;
 const PERM_WALL: u64 = 8192;
 
@@ -388,39 +353,28 @@ pub async fn publish_post(
     settings: &AppSettings,
     message: &str,
     image_url: Option<&str>,
-    link_url: Option<&str>,
     data_dir: Option<&Path>,
 ) -> Result<String> {
+    let image_url = image_url
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .context("VK: пост без изображения не публикуется")?;
+
     let (community_token, group_id) = group_credentials(settings)?;
     let upload_token = photo_upload_token(settings, &community_token);
     let owner_id = format!("-{group_id}");
 
-    let photo_attachment = if let Some(img_url) = image_url {
-        upload_photo(client, &upload_token, &group_id, img_url, data_dir)
-            .await
-            .map(Some)
-            .map_err(|e| anyhow::anyhow!(photo_upload_failure_message(settings, &e)))?
-    } else {
-        None
-    };
+    let photo_attachment = upload_photo(client, &upload_token, &group_id, image_url, data_dir)
+        .await
+        .map_err(|e| anyhow::anyhow!(photo_upload_failure_message(settings, &e)))?;
 
-    let attachment = build_attachments(photo_attachment, link_url);
-    let wall_message = if attachment.is_none() {
-        append_link_to_message(message, link_url)
-    } else {
-        message.to_string()
-    };
-
-    let mut params = vec![
+    let params = vec![
         ("owner_id", owner_id),
         ("from_group", "1".to_string()),
-        ("message", wall_message),
+        ("message", message.to_string()),
+        ("attachments", photo_attachment),
         ("access_token", community_token),
     ];
-
-    if let Some(att) = attachment {
-        params.push(("attachments", att));
-    }
 
     let resp = vk_method(client, "wall.post", params).await?;
 
@@ -475,6 +429,8 @@ async fn upload_photo(
 
     let img_bytes = if let Some(dir) = data_dir {
         image_loader::load_image_bytes(client, dir, image_url).await?
+    } else if image_loader::is_local_image_ref(image_url) {
+        bail!("Local image requires data_dir");
     } else {
         client
             .get(image_url)
@@ -530,22 +486,26 @@ async fn upload_photo(
 
     let photo_obj = &save_resp["response"][0];
     let photo_id = photo_obj["id"].as_i64().context("No photo id")?;
-    let photo_owner = photo_obj["owner_id"].as_i64().context("No photo owner")?;
+    let saved_owner = photo_obj["owner_id"].as_i64().context("No photo owner")?;
 
-    Ok(format!("photo{photo_owner}_{photo_id}"))
+    Ok(group_wall_photo_attachment(group_id, photo_id, saved_owner))
+}
+
+/// VK возвращает owner_id пользователя, но для wall.post сообщества нужен `-group_id`.
+fn group_wall_photo_attachment(group_id: &str, photo_id: i64, saved_owner: i64) -> String {
+    if saved_owner < 0 {
+        format!("photo{saved_owner}_{photo_id}")
+    } else {
+        format!("photo-{group_id}_{photo_id}")
+    }
 }
 
 pub fn format_message(title: &str, text: &str, hashtags: &str) -> String {
-    let title = title.trim();
-    let bold_title = if title.is_empty() {
-        String::new()
-    } else {
-        format!("*{}*", title.replace('*', ""))
-    };
+    let title = title.trim().replace('*', "");
 
     let mut parts = Vec::new();
-    if !bold_title.is_empty() {
-        parts.push(bold_title);
+    if !title.is_empty() {
+        parts.push(title.to_string());
     }
     if !text.trim().is_empty() {
         if !parts.is_empty() {
@@ -620,48 +580,24 @@ mod tests {
     }
 
     #[test]
-    fn accepts_http_link_attachment() {
+    fn group_wall_photo_attachment_uses_negative_group_id() {
         assert_eq!(
-            link_attachment(Some("https://example.com/news")),
-            Some("https://example.com/news".to_string())
+            group_wall_photo_attachment("225364560", 456, 1468099),
+            "photo-225364560_456"
         );
-        assert!(link_attachment(Some("not-a-url")).is_none());
-    }
-
-    #[test]
-    fn link_only_attachment_is_not_allowed() {
-        assert!(build_attachments(
-            None,
-            Some("https://example.com/news")
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn photo_and_link_combined_in_attachments() {
         assert_eq!(
-            build_attachments(
-                Some("photo-1_2".to_string()),
-                Some("https://example.com/news")
-            ),
-            Some("photo-1_2,https://example.com/news".to_string())
+            group_wall_photo_attachment("225364560", 456, -225364560),
+            "photo-225364560_456"
         );
     }
 
     #[test]
-    fn appends_source_link_when_no_photo() {
-        let msg = append_link_to_message("Заголовок\n\nТекст", Some("https://example.com/news"));
-        assert!(msg.contains("https://example.com/news"));
-        assert!(msg.starts_with("Заголовок"));
-    }
-
-    #[test]
-    fn does_not_duplicate_link_in_message() {
-        let msg = append_link_to_message(
-            "Уже есть https://example.com/other",
-            Some("https://example.com/news"),
-        );
-        assert_eq!(msg, "Уже есть https://example.com/other");
+    fn format_message_uses_plain_title_without_asterisks() {
+        let msg = format_message("Destiny 2: тест", "Текст поста", "#игры");
+        assert!(msg.starts_with("Destiny 2: тест"));
+        assert!(!msg.contains('*'));
+        assert!(msg.contains("Текст поста"));
+        assert!(msg.contains("#игры"));
     }
 
     #[test]

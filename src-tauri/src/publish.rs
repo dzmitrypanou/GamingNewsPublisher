@@ -1,7 +1,7 @@
 use crate::models::{PublishResult, UnpublishResult};
 use crate::services::{ai, content_filter, data_dir, dedup_pipeline, post_text, settings_store, telegram_api, vk_api, vk_oauth};
 use crate::AppState;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 
 pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
@@ -73,7 +73,8 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
     let vk_message = vk_api::format_message(&title, &text, hashtags);
     let tg_caption = telegram_api::format_caption(&title, &text, hashtags);
     let image_url = post.raw_image_url.as_deref();
-    let app_data_dir = data_dir::resolve(&state.app_handle).ok();
+    let app_data_dir = data_dir::resolve(&state.app_handle)
+        .context("Не удалось определить каталог данных приложения")?;
 
     let mut vk_success = false;
     let mut vk_message_result = String::new();
@@ -85,8 +86,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         &settings,
         &vk_message,
         image_url,
-        Some(&post.source_url),
-        app_data_dir.as_deref(),
+        Some(app_data_dir.as_path()),
     )
     .await
     {
@@ -109,7 +109,7 @@ pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
         &settings,
         &tg_caption,
         image_url,
-        app_data_dir.as_deref(),
+        Some(app_data_dir.as_path()),
     )
     .await
     {
