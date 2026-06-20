@@ -47,6 +47,7 @@ pub struct AppState {
     scheduler: Mutex<Option<SchedulerHandle>>,
     backup_scheduler: Mutex<Option<BackupSchedulerHandle>>,
     auto_publish_scheduler: Mutex<Option<AutoPublishSchedulerHandle>>,
+    pub vk_oauth_pending: Mutex<Option<services::vk_oauth::PendingVkOAuth>>,
 }
 
 impl AppState {
@@ -137,6 +138,7 @@ pub fn run() {
                 scheduler: Mutex::new(None),
                 backup_scheduler: Mutex::new(None),
                 auto_publish_scheduler: Mutex::new(None),
+                vk_oauth_pending: Mutex::new(None),
             });
 
             if settings.local_generation_needed()
@@ -206,7 +208,8 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::test_vk,
-            commands::vk_oauth_authorize,
+            commands::vk_oauth_start,
+            commands::vk_oauth_finish,
             commands::test_telegram,
             commands::test_deepseek,
             commands::test_proxy,

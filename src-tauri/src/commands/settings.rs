@@ -70,19 +70,41 @@ pub async fn test_proxy(state: State<'_, std::sync::Arc<AppState>>) -> Result<Ap
 }
 
 #[tauri::command]
-pub async fn vk_oauth_authorize(
-    state: State<'_, std::sync::Arc<AppState>>,
-) -> Result<VkOAuthResult, String> {
-    let mut settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
-
-    let tokens = vk_oauth::authorize_user_token(
+pub async fn vk_oauth_start(state: State<'_, std::sync::Arc<AppState>>) -> Result<(), String> {
+    let settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+    let (pending, _) = vk_oauth::begin_oauth(
         &state.app_handle,
-        &state.http_client(),
         &settings.vk_app_id,
         &settings.vk_service_token,
     )
-    .await
     .map_err(|e| e.to_string())?;
+
+    *state
+        .vk_oauth_pending
+        .lock()
+        .map_err(|e| e.to_string())? = Some(pending);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn vk_oauth_finish(
+    state: State<'_, std::sync::Arc<AppState>>,
+    pasted_url: String,
+) -> Result<VkOAuthResult, String> {
+    let pending = state
+        .vk_oauth_pending
+        .lock()
+        .map_err(|e| e.to_string())?
+        .take()
+        .ok_or_else(|| {
+            "Сначала нажмите «Войти через VK» и пройдите авторизацию в браузере.".to_string()
+        })?;
+
+    let mut settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+
+    let tokens = vk_oauth::finish_oauth(&state.http_client(), pending, &pasted_url)
+        .await
+        .map_err(|e| e.to_string())?;
 
     settings.vk_user_token = tokens.access_token;
     if !tokens.refresh_token.is_empty() {
@@ -90,12 +112,17 @@ pub async fn vk_oauth_authorize(
     }
     settings_store::save_settings(&state.app_handle, &settings).map_err(|e| e.to_string())?;
 
+    let mut message = if settings.vk_refresh_token.is_empty() {
+        "User token получен и сохранён.".to_string()
+    } else {
+        "User token и refresh token получены и сохранены.".to_string()
+    };
+    if let Some(hint) = vk_api::vk_user_token_photo_hint(&settings.vk_user_token) {
+        message = format!("{message} {hint}");
+    }
+
     Ok(VkOAuthResult {
         success: true,
-        message: if settings.vk_refresh_token.is_empty() {
-            "User token получен и сохранён.".to_string()
-        } else {
-            "User token и refresh token получены и сохранены.".to_string()
-        },
+        message,
     })
 }

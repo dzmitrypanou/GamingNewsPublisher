@@ -6,6 +6,41 @@ use reqwest::Client;
 use serde_json::json;
 use std::path::Path;
 
+fn humanize_telegram_request_error(err: &reqwest::Error, settings: &AppSettings) -> String {
+    let detail = err.to_string();
+    let lower = detail.to_ascii_lowercase();
+
+    if lower.contains("error sending request") || err.is_connect() || err.is_timeout() {
+        let mut msg = if err.is_timeout() || lower.contains("timed out") {
+            "Таймаут при подключении к Telegram API.".to_string()
+        } else if lower.contains("dns error") || lower.contains("failed to lookup") {
+            "Не удалось разрешить api.telegram.org (ошибка DNS).".to_string()
+        } else {
+            "Не удалось подключиться к Telegram API (api.telegram.org).".to_string()
+        };
+        if settings.proxy_enabled {
+            msg.push_str(" В настройках включён прокси — проверьте его кнопкой «Проверить прокси» или отключите для Telegram.");
+        } else {
+            msg.push_str(" Проверьте интернет, VPN и что api.telegram.org не заблокирован.");
+        }
+        return msg;
+    }
+
+    format!("Ошибка Telegram: {detail}")
+}
+
+async fn telegram_request(
+    settings: &AppSettings,
+    send: impl std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+) -> Result<serde_json::Value> {
+    let resp = send
+        .await
+        .map_err(|e| anyhow::anyhow!(humanize_telegram_request_error(&e, settings)))?;
+    resp.json()
+        .await
+        .context("Telegram: некорректный ответ API")
+}
+
 pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTestResult {
     if settings.telegram_bot_token.is_empty() || settings.telegram_channel_id.is_empty() {
         return ApiTestResult {
@@ -31,7 +66,8 @@ async fn get_bot_info(client: &Client, settings: &AppSettings) -> Result<String>
         "https://api.telegram.org/bot{}/getMe",
         settings.telegram_bot_token
     );
-    let resp: serde_json::Value = client.get(&url).send().await?.json().await?;
+    let resp: serde_json::Value = telegram_request(settings, client.get(&url).send())
+        .await?;
 
     if !resp["ok"].as_bool().unwrap_or(false) {
         anyhow::bail!(
@@ -83,7 +119,8 @@ pub async fn delete_message(
         "message_id": message_id.parse::<i64>().context("Invalid message_id")?,
     });
 
-    let resp: serde_json::Value = client.post(&url).json(&body).send().await?.json().await?;
+    let resp: serde_json::Value = telegram_request(settings, client.post(&url).json(&body).send())
+        .await?;
 
     if !resp["ok"].as_bool().unwrap_or(false) {
         anyhow::bail!(
@@ -121,7 +158,7 @@ async fn publish_with_photo(
                     .file_name("photo.jpg")
                     .mime_str("image/jpeg")?,
             );
-        client.post(&url).multipart(form).send().await?.json().await?
+        telegram_request(settings, client.post(&url).multipart(form).send()).await?
     } else {
         let body = json!({
             "chat_id": chat_id,
@@ -129,7 +166,7 @@ async fn publish_with_photo(
             "caption": caption,
             "parse_mode": "HTML"
         });
-        client.post(&url).json(&body).send().await?.json().await?
+        telegram_request(settings, client.post(&url).json(&body).send()).await?
     };
 
     if !resp["ok"].as_bool().unwrap_or(false) {
@@ -163,7 +200,8 @@ async fn publish_message(
         "disable_web_page_preview": false
     });
 
-    let resp: serde_json::Value = client.post(&url).json(&body).send().await?.json().await?;
+    let resp: serde_json::Value = telegram_request(settings, client.post(&url).json(&body).send())
+        .await?;
 
     if !resp["ok"].as_bool().unwrap_or(false) {
         anyhow::bail!(

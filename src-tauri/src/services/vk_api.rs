@@ -75,9 +75,40 @@ fn has_user_photo_token(settings: &AppSettings) -> bool {
     !settings.vk_user_token.trim().is_empty()
 }
 
+/// VK ID OAuth выдаёт `vk2.a.*` — такой токен не работает с классическим api.vk.com (photos.*, wall.*).
+pub fn is_vk_id_api_token(token: &str) -> bool {
+    token.trim().starts_with("vk2.a.")
+}
+
+pub fn vk_user_token_photo_hint(token: &str) -> Option<&'static str> {
+    if is_vk_id_api_token(token) {
+        Some(
+            "Токен VK ID (vk2.a.*) не поддерживает загрузку фото через API. \
+             Получите user token формата vk1.a.* на vkhost.github.io с правами «Стена», «Фотографии», «Offline».",
+        )
+    } else {
+        None
+    }
+}
+
+fn is_invalid_access_token_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("invalid access_token") || lower.contains("access_token has expired")
+}
+
 fn photo_upload_failure_message(settings: &AppSettings, err: &anyhow::Error) -> String {
     let detail = err.to_string();
     if has_user_photo_token(settings) {
+        if let Some(hint) = vk_user_token_photo_hint(&settings.vk_user_token) {
+            return format!("Не удалось загрузить фото в VK: {detail}. {hint}");
+        }
+        if is_invalid_access_token_error(&detail) {
+            return format!(
+                "Не удалось загрузить фото в VK: {detail}. \
+                 User token недействителен или истёк. Получите новый на vkhost.github.io \
+                 (права: wall, photos, offline) и вставьте в поле «User token»."
+            );
+        }
         return format!(
             "Не удалось загрузить фото в VK: {detail}. \
              Проверьте права user token (wall, photos, offline) и что аккаунт — админ/редактор группы."
@@ -276,6 +307,13 @@ pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTest
                 };
             }
 
+            if let Some(hint) = vk_user_token_photo_hint(&settings.vk_user_token) {
+                return ApiTestResult {
+                    success: false,
+                    message: format!("Группа «{name}» найдена. {hint}"),
+                };
+            }
+
             let upload_token = photo_upload_token(settings, &community_token);
             match verify_wall_upload(client, &upload_token, &group_id).await {
                 Ok(()) if has_user_photo_token(settings) => ApiTestResult {
@@ -289,6 +327,15 @@ pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTest
                     message: format!("Подключено: {name}. Публикация с фото доступна."),
                 },
                 Err(e) if has_user_photo_token(settings) => {
+                    if is_invalid_access_token_error(&e.to_string()) {
+                        return ApiTestResult {
+                            success: false,
+                            message: format!(
+                                "Группа «{name}» найдена, но user token недействителен: {e}. \
+                                 Получите новый токен на vkhost.github.io (wall + photos + offline)."
+                            ),
+                        };
+                    }
                     let scope_hint = if is_scope_error(&e.to_string()) {
                         match get_user_token_permissions(client, &upload_token).await {
                             Ok(mask) => format!(
@@ -519,6 +566,14 @@ pub fn format_message(title: &str, text: &str, hashtags: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_vk_id_token_prefix() {
+        assert!(is_vk_id_api_token("vk2.a.abc"));
+        assert!(!is_vk_id_api_token("vk1.a.abc"));
+        assert!(vk_user_token_photo_hint("vk2.a.x").is_some());
+        assert!(vk_user_token_photo_hint("vk1.a.x").is_none());
+    }
 
     #[test]
     fn normalizes_numeric_group_id() {

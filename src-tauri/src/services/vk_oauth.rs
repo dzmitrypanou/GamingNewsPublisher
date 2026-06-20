@@ -1,27 +1,19 @@
 use anyhow::{Context, Result, bail};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use rcgen::generate_simple_self_signed;
 use reqwest::Client;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::ServerConfig;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio::time::{Duration, timeout};
-use tokio_rustls::TlsAcceptor;
 
-pub const REDIRECT_URI: &str = "https://localhost";
-const CALLBACK_PORT: u16 = 443;
-const OAUTH_SCOPE: &str = "wall photos offline";
-const AUTH_TIMEOUT: Duration = Duration::from_secs(300);
+pub const REDIRECT_URI: &str = "https://oauth.vk.com/blank.html";
+const OAUTH_SCOPE: &str = "wall,photos,offline,groups";
+const AUTHORIZE_URL: &str = "https://id.vk.com/authorize";
+const TOKEN_URL: &str = "https://id.vk.com/oauth2/auth";
 
 static ENTROPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -30,6 +22,13 @@ const PKCE_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 pub(crate) struct OAuthTokens {
     pub access_token: String,
     pub refresh_token: String,
+}
+
+pub struct PendingVkOAuth {
+    pub code_verifier: String,
+    pub state: String,
+    pub app_id: String,
+    pub service_token: String,
 }
 
 struct CallbackParams {
@@ -69,35 +68,8 @@ fn code_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
-fn ensure_rustls_provider() {
-    static INIT: OnceLock<()> = OnceLock::new();
-    INIT.get_or_init(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-}
-
-fn local_tls_acceptor() -> Result<TlsAcceptor> {
-    ensure_rustls_provider();
-    let certified = generate_simple_self_signed(vec![
-        "127.0.0.1".to_string(),
-        "localhost".to_string(),
-    ])
-    .context("Не удалось создать локальный TLS-сертификат")?;
-
-    let cert = CertificateDer::from(certified.cert.der().to_vec());
-    let key = PrivateKeyDer::try_from(certified.key_pair.serialize_der())
-        .map_err(|_| anyhow::anyhow!("Не удалось подготовить TLS-ключ"))?;
-
-    let config = ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert], key)
-        .context("Не удалось настроить TLS для OAuth callback")?;
-
-    Ok(TlsAcceptor::from(Arc::new(config)))
-}
-
 fn build_authorize_url(app_id: &str, state: &str, code_challenge: &str) -> Result<String> {
-    let mut url = reqwest::Url::parse("https://id.vk.ru/authorize")?;
+    let mut url = reqwest::Url::parse(AUTHORIZE_URL)?;
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", app_id)
@@ -109,11 +81,8 @@ fn build_authorize_url(app_id: &str, state: &str, code_challenge: &str) -> Resul
     Ok(url.to_string())
 }
 
-fn parse_query(path: &str) -> Result<HashMap<String, String>> {
-    let query = path
-        .split_once('?')
-        .map(|(_, q)| q)
-        .unwrap_or(path);
+fn parse_query(query: &str) -> Result<HashMap<String, String>> {
+    let query = query.trim_start_matches('?');
     let mut params = HashMap::new();
     for pair in query.split('&') {
         if pair.is_empty() {
@@ -155,7 +124,12 @@ fn urlencoding_decode(input: &str) -> String {
 }
 
 fn parse_callback_path(path: &str, expected_state: &str) -> Result<CallbackParams> {
-    let params = parse_query(path)?;
+    let params = parse_query(
+        path
+            .split_once('?')
+            .map(|(_, q)| q)
+            .unwrap_or(path.trim_start_matches('/')),
+    )?;
     if let Some(error) = params.get("error") {
         let description = params
             .get("error_description")
@@ -182,88 +156,89 @@ fn parse_callback_path(path: &str, expected_state: &str) -> Result<CallbackParam
     })
 }
 
-async fn write_callback_response<S>(stream: &mut S, body: &str) -> Result<()>
-where
-    S: AsyncWriteExt + Unpin,
-{
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(response.as_bytes()).await?;
-    stream.flush().await?;
-    Ok(())
+pub fn parse_callback_from_pasted(raw: &str, expected_state: &str) -> Result<CallbackParams> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        bail!("Вставьте URL из адресной строки браузера после входа VK");
+    }
+
+    if raw.contains("://") {
+        let url = reqwest::Url::parse(raw).context("Некорректный URL")?;
+        let mut path = url.path().to_string();
+        if let Some(query) = url.query() {
+            path.push('?');
+            path.push_str(query);
+        } else if url.path().is_empty() || url.path() == "/" {
+            if let Some(fragment) = url.fragment() {
+                if fragment.contains('=') {
+                    path = format!("/?{fragment}");
+                }
+            }
+        }
+        return parse_callback_path(&path, expected_state);
+    }
+
+    if raw.starts_with('?') {
+        return parse_callback_path(raw, expected_state);
+    }
+
+    if raw.contains('=') {
+        return parse_callback_path(&format!("?{raw}"), expected_state);
+    }
+
+    bail!("Не удалось распознать code и device_id. Скопируйте полный адрес из строки браузера.");
 }
 
-async fn read_callback_request<S>(stream: &mut S) -> Result<String>
-where
-    S: AsyncReadExt + Unpin,
-{
-    let mut buffer = vec![0u8; 8192];
-    let read = stream
-        .read(&mut buffer)
-        .await
-        .context("Не удалось прочитать OAuth callback")?;
-    Ok(String::from_utf8_lossy(&buffer[..read]).into_owned())
-}
+pub fn begin_oauth(
+    app: &AppHandle,
+    app_id: &str,
+    service_token: &str,
+) -> Result<(PendingVkOAuth, String)> {
+    let app_id = app_id.trim();
+    let service_token = service_token.trim();
 
-async fn accept_callback(
-    listener: TcpListener,
-    tls_acceptor: TlsAcceptor,
-    expected_state: &str,
-) -> Result<CallbackParams> {
-    let (stream, _) = listener
-        .accept()
-        .await
-        .context("Не удалось принять OAuth callback")?;
+    if app_id.is_empty() {
+        bail!("Укажите ID приложения VK");
+    }
+    if service_token.is_empty() {
+        bail!("Укажите сервисный ключ доступа VK");
+    }
 
-    let mut tls_stream = tls_acceptor
-        .accept(stream)
-        .await
-        .context("TLS handshake OAuth callback не удался")?;
+    let code_verifier = random_string(64, b"verifier");
+    let challenge = code_challenge(&code_verifier);
+    let state = random_string(48, b"state");
+    let authorize_url = build_authorize_url(app_id, &state, &challenge)?;
 
-    let request = read_callback_request(&mut tls_stream).await?;
-    let request_line = request.lines().next().context("Пустой OAuth callback")?;
-    let path = request_line
-        .split_whitespace()
-        .nth(1)
-        .context("Некорректный OAuth callback")?;
-
-    let result = parse_callback_path(path, expected_state);
-    let body = if result.is_ok() {
-        "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\"><title>VK</title></head>\
-         <body style=\"font-family:sans-serif;text-align:center;padding:2rem\">\
-         <h2>Авторизация VK завершена</h2><p>Можно закрыть это окно и вернуться в приложение.</p>\
-         </body></html>"
-    } else {
-        "<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\"><title>VK</title></head>\
-         <body style=\"font-family:sans-serif;text-align:center;padding:2rem\">\
-         <h2>Ошибка авторизации VK</h2><p>Вернитесь в приложение и попробуйте снова.</p>\
-         </body></html>"
+    let pending = PendingVkOAuth {
+        code_verifier,
+        state,
+        app_id: app_id.to_string(),
+        service_token: service_token.to_string(),
     };
-    let _ = write_callback_response(&mut tls_stream, body).await;
-    result
+
+    app.opener()
+        .open_url(&authorize_url, None::<&str>)
+        .context("Не удалось открыть браузер для авторизации VK")?;
+
+    Ok((pending, authorize_url))
 }
 
 async fn exchange_code(
     client: &Client,
-    app_id: &str,
-    service_token: &str,
-    code_verifier: &str,
+    pending: &PendingVkOAuth,
     callback: &CallbackParams,
 ) -> Result<OAuthTokens> {
     let resp = client
-        .post("https://id.vk.ru/oauth2/auth")
+        .post(TOKEN_URL)
         .form(&[
             ("grant_type", "authorization_code".to_string()),
-            ("code_verifier", code_verifier.to_string()),
+            ("code_verifier", pending.code_verifier.clone()),
             ("redirect_uri", REDIRECT_URI.to_string()),
             ("code", callback.code.clone()),
-            ("client_id", app_id.to_string()),
+            ("client_id", pending.app_id.clone()),
             ("device_id", callback.device_id.clone()),
             ("state", callback.state.clone()),
-            ("service_token", service_token.to_string()),
+            ("service_token", pending.service_token.clone()),
         ])
         .send()
         .await
@@ -294,57 +269,13 @@ async fn exchange_code(
     })
 }
 
-pub async fn authorize_user_token(
-    app: &AppHandle,
+pub async fn finish_oauth(
     client: &Client,
-    app_id: &str,
-    service_token: &str,
+    pending: PendingVkOAuth,
+    pasted_url: &str,
 ) -> Result<OAuthTokens> {
-    let app_id = app_id.trim();
-    let service_token = service_token.trim();
-
-    if app_id.is_empty() {
-        bail!("Укажите ID приложения VK");
-    }
-    if service_token.is_empty() {
-        bail!("Укажите сервисный ключ доступа VK");
-    }
-
-    let code_verifier = random_string(64, b"verifier");
-    let challenge = code_challenge(&code_verifier);
-    let state = random_string(48, b"state");
-    let authorize_url = build_authorize_url(app_id, &state, &challenge)?;
-
-    let tls_acceptor = local_tls_acceptor()?;
-    let listener = TcpListener::bind(format!("127.0.0.1:{CALLBACK_PORT}"))
-        .await
-        .context(
-            "Не удалось запустить HTTPS-сервер на порту 443. \
-             Запустите приложение от имени администратора или освободите порт 443. \
-             Альтернатива: получите user token вручную на vkhost.github.io.",
-        )?;
-    let expected_state = state.clone();
-    let callback_task =
-        tokio::spawn(async move { accept_callback(listener, tls_acceptor, &expected_state).await });
-
-    app.opener()
-        .open_url(authorize_url, None::<&str>)
-        .context("Не удалось открыть браузер для авторизации VK")?;
-
-    let callback = match timeout(AUTH_TIMEOUT, callback_task).await {
-        Ok(Ok(result)) => result?,
-        Ok(Err(err)) => return Err(err).context("OAuth callback failed"),
-        Err(_) => bail!("Время ожидания авторизации истекло (5 минут)"),
-    };
-
-    exchange_code(
-        client,
-        app_id,
-        service_token,
-        &code_verifier,
-        &callback,
-    )
-    .await
+    let callback = parse_callback_from_pasted(pasted_url, &pending.state)?;
+    exchange_code(client, &pending, &callback).await
 }
 
 #[cfg(test)]
@@ -352,8 +283,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn redirect_uri_uses_https() {
-        assert!(REDIRECT_URI.starts_with("https://"));
+    fn redirect_uri_uses_https_blank() {
+        assert_eq!(REDIRECT_URI, "https://oauth.vk.com/blank.html");
     }
 
     #[test]
@@ -362,33 +293,28 @@ mod tests {
         let challenge = code_challenge(&verifier);
         assert!(challenge.len() >= 43);
         assert!(!challenge.contains('='));
-        assert!(!challenge.contains('+'));
-        assert!(!challenge.contains('/'));
     }
 
     #[test]
-    fn parses_successful_callback() {
+    fn parses_pasted_localhost_url() {
         let state = "expected_state_value_12345678901234567890";
-        let path = format!("/callback?code=abc123&device_id=dev456&state={state}");
-        let parsed = parse_callback_path(&path, state).unwrap();
+        let url = format!("https://oauth.vk.com/blank.html?code=abc123&device_id=dev456&state={state}");
+        let parsed = parse_callback_from_pasted(&url, state).unwrap();
         assert_eq!(parsed.code, "abc123");
         assert_eq!(parsed.device_id, "dev456");
     }
 
     #[test]
+    fn parses_query_only_paste() {
+        let state = "expected_state_value_12345678901234567890";
+        let query = format!("code=abc123&device_id=dev456&state={state}");
+        let parsed = parse_callback_from_pasted(&query, state).unwrap();
+        assert_eq!(parsed.code, "abc123");
+    }
+
+    #[test]
     fn rejects_state_mismatch() {
-        let path = "/callback?code=abc&device_id=dev&state=wrong";
-        assert!(parse_callback_path(path, "expected").is_err());
-    }
-
-    #[test]
-    fn parses_oauth_error_callback() {
-        let path = "/callback?error=access_denied&error_description=User%20denied";
-        assert!(parse_callback_path(path, "any").is_err());
-    }
-
-    #[test]
-    fn local_tls_acceptor_builds() {
-        local_tls_acceptor().expect("tls config");
+        let url = "https://localhost/?code=abc&device_id=dev&state=wrong";
+        assert!(parse_callback_from_pasted(url, "expected").is_err());
     }
 }

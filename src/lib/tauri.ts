@@ -32,8 +32,12 @@ export async function testVk(): Promise<ApiTestResult> {
   return invoke("test_vk");
 }
 
-export async function vkOauthAuthorize(): Promise<VkOAuthResult> {
-  return invoke("vk_oauth_authorize");
+export async function vkOauthStart(): Promise<void> {
+  return invoke("vk_oauth_start");
+}
+
+export async function vkOauthFinish(pastedUrl: string): Promise<VkOAuthResult> {
+  return invoke("vk_oauth_finish", { pastedUrl });
 }
 
 export async function testTelegram(): Promise<ApiTestResult> {

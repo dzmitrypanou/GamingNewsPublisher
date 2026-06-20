@@ -15,7 +15,8 @@ import {
   importBackup,
   pickBackupDirectory,
   testVk,
-  vkOauthAuthorize,
+  vkOauthStart,
+  vkOauthFinish,
   testTelegram,
   testDeepseek,
   testProxy,
@@ -158,6 +159,8 @@ export function Settings() {
   const [showCustomModelForm, setShowCustomModelForm] = useState(false);
   const [regeneratingQueueImages, setRegeneratingQueueImages] = useState(false);
   const [vkOauthing, setVkOauthing] = useState(false);
+  const [vkOauthWaitingUrl, setVkOauthWaitingUrl] = useState(false);
+  const [vkOauthPaste, setVkOauthPaste] = useState("");
   const [vkOauthResult, setVkOauthResult] = useState<VkOAuthResult | null>(null);
 
   const formatGb = (bytes: number) => {
@@ -813,13 +816,30 @@ export function Settings() {
     }
   };
 
-  const handleVkOAuth = async () => {
+  const handleVkOAuthStart = async () => {
+    setVkOauthing(true);
+    setVkOauthResult(null);
+    setVkOauthPaste("");
+    try {
+      await saveSettings(settings);
+      await vkOauthStart();
+      setVkOauthWaitingUrl(true);
+    } catch (e) {
+      setVkOauthResult({ success: false, message: String(e) });
+      setVkOauthWaitingUrl(false);
+    } finally {
+      setVkOauthing(false);
+    }
+  };
+
+  const handleVkOAuthFinish = async () => {
     setVkOauthing(true);
     setVkOauthResult(null);
     try {
-      await saveSettings(settings);
-      const result = await vkOauthAuthorize();
+      const result = await vkOauthFinish(vkOauthPaste.trim());
       setVkOauthResult(result);
+      setVkOauthWaitingUrl(false);
+      setVkOauthPaste("");
       const fresh = await getSettings();
       setSettings(fresh);
     } catch (e) {
@@ -1062,13 +1082,15 @@ export function Settings() {
                       кабинете VK ID
                     </a>{" "}
                     при создании Web-приложения укажите: базовый домен{" "}
-                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">localhost</code>
+                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">
+                      oauth.vk.com
+                    </code>
                     , redirect URI{" "}
                     <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">
-                      https://localhost
+                      https://oauth.vk.com/blank.html
                     </code>
-                    . IP-адрес и порт в URL VK не принимает. Для кнопки «Войти через VK» может
-                    понадобиться запуск приложения от имени администратора (порт 443).
+                    . Включите доступ «Сообщества»; wall и photos — через поддержку VK
+                    (devsupport@corp.vk.com), если их нет в списке.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -1092,15 +1114,27 @@ export function Settings() {
                     onChange={(e) => update("vk_user_token", e.target.value)}
                     placeholder="заполнится после входа через VK"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Для загрузки фото нужен user token формата{" "}
+                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">vk1.a.*</code>{" "}
+                    с vkhost.github.io (Стена + Фотографии + Offline). Токен VK ID (
+                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">vk2.a.*</code>)
+                    из «Войти через VK» не работает с api.vk.com для фото.
+                  </p>
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={handleVkOAuth}
-                      disabled={vkOauthing || !settings.vk_app_id.trim() || !settings.vk_service_token.trim()}
+                      onClick={handleVkOAuthStart}
+                      disabled={
+                        vkOauthing ||
+                        vkOauthWaitingUrl ||
+                        !settings.vk_app_id.trim() ||
+                        !settings.vk_service_token.trim()
+                      }
                     >
-                      {vkOauthing ? (
+                      {vkOauthing && !vkOauthWaitingUrl ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       ) : null}
                       Войти через VK
@@ -1117,6 +1151,50 @@ export function Settings() {
                       </a>
                     </span>
                   </div>
+                  {vkOauthWaitingUrl && (
+                    <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        В браузере нажмите «Разрешить». Откроется страница{" "}
+                        <code className="rounded bg-secondary px-1">oauth.vk.com/blank.html</code>{" "}
+                        с предупреждением «не копируйте данные из адресной строки» — это нормально.
+                        Скопируйте{" "}
+                        <strong className="font-medium text-foreground">полный адрес</strong> из
+                        строки браузера и вставьте ниже.
+                      </p>
+                      <Textarea
+                        value={vkOauthPaste}
+                        onChange={(e) => setVkOauthPaste(e.target.value)}
+                        placeholder="https://oauth.vk.com/blank.html?code=...&device_id=...&state=..."
+                        rows={3}
+                        className="text-xs"
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleVkOAuthFinish}
+                          disabled={vkOauthing || !vkOauthPaste.trim()}
+                        >
+                          {vkOauthing ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : null}
+                          Готово
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setVkOauthWaitingUrl(false);
+                            setVkOauthPaste("");
+                          }}
+                          disabled={vkOauthing}
+                        >
+                          Отмена
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                   {vkOauthResult && (
                     <p
                       className={cn(
