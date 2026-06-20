@@ -14,6 +14,104 @@ pub const REDIRECT_URI: &str = "https://oauth.vk.com/blank.html";
 const OAUTH_SCOPE: &str = "wall,photos,offline,groups";
 const AUTHORIZE_URL: &str = "https://id.vk.com/authorize";
 const TOKEN_URL: &str = "https://id.vk.com/oauth2/auth";
+const LEGACY_AUTHORIZE_URL: &str = "https://oauth.vk.com/authorize";
+
+pub struct LegacyVkApp {
+    pub id: u32,
+    pub name: &'static str,
+}
+
+/// Standalone-приложения VK (как на vkhost.github.io) — для legacy OAuth с `response_type=token`.
+pub fn legacy_vk_apps() -> &'static [LegacyVkApp] {
+    &[
+        LegacyVkApp {
+            id: 2685278,
+            name: "Kate Mobile",
+        },
+        LegacyVkApp {
+            id: 6121396,
+            name: "VK Admin",
+        },
+        LegacyVkApp {
+            id: 6287487,
+            name: "vk.com",
+        },
+        LegacyVkApp {
+            id: 4083558,
+            name: "VFeed",
+        },
+        LegacyVkApp {
+            id: 3698024,
+            name: "Instagram",
+        },
+    ]
+}
+
+pub fn build_legacy_authorize_url(app_id: &str) -> Result<String> {
+    let app_id = app_id.trim();
+    if app_id.is_empty() {
+        bail!("Укажите ID приложения VK");
+    }
+    if !app_id.chars().all(|c| c.is_ascii_digit()) {
+        bail!("ID приложения VK должен содержать только цифры");
+    }
+    Ok(format!(
+        "{LEGACY_AUTHORIZE_URL}?client_id={app_id}&display=page&redirect_uri={REDIRECT_URI}&scope={OAUTH_SCOPE}&response_type=token&revoke=1&v=5.199"
+    ))
+}
+
+pub fn parse_legacy_token_from_pasted(raw: &str) -> Result<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        bail!("Вставьте URL из адресной строки браузера после авторизации VK");
+    }
+
+    if raw.starts_with("vk1.a.") || raw.starts_with("vk2.a.") {
+        return Ok(raw.to_string());
+    }
+
+    let fragment = if raw.contains("://") {
+        let url = reqwest::Url::parse(raw).context("Некорректный URL")?;
+        url.fragment()
+            .map(str::to_string)
+            .or_else(|| url.query().map(str::to_string))
+            .unwrap_or_default()
+    } else {
+        raw.trim_start_matches('#').to_string()
+    };
+
+    if fragment.is_empty() {
+        bail!("В URL нет access_token. Скопируйте полный адрес страницы oauth.vk.com/blank.html");
+    }
+
+    let params = parse_query(&format!(
+        "?{}",
+        fragment.trim_start_matches('?')
+    ))?;
+
+    if let Some(error) = params.get("error") {
+        let description = params
+            .get("error_description")
+            .map(String::as_str)
+            .unwrap_or(error);
+        bail!("VK отклонил авторизацию: {description}");
+    }
+
+    params
+        .get("access_token")
+        .cloned()
+        .context(
+            "В URL нет access_token. Скопируйте адрес целиком — от https://oauth.vk.com/blank.html#access_token=...",
+        )
+}
+
+pub fn begin_legacy_oauth(app: &AppHandle, app_id: &str) -> Result<String> {
+    let authorize_url = build_legacy_authorize_url(app_id)?;
+    app.opener()
+        .open_url(&authorize_url, None::<&str>)
+        .context("Не удалось открыть браузер для авторизации VK")?;
+    Ok(authorize_url)
+}
 
 static ENTROPY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -223,6 +321,97 @@ pub fn begin_oauth(
     Ok((pending, authorize_url))
 }
 
+async fn parse_token_response(value: &Value) -> Result<OAuthTokens> {
+    if let Some(error) = value.get("error") {
+        let msg = value["error_description"]
+            .as_str()
+            .or_else(|| error.as_str())
+            .unwrap_or("OAuth error");
+        bail!("{msg}");
+    }
+
+    let access_token = value["access_token"]
+        .as_str()
+        .context("VK OAuth: нет access_token")?
+        .to_string();
+    let refresh_token = value["refresh_token"].as_str().unwrap_or("").to_string();
+
+    Ok(OAuthTokens {
+        access_token,
+        refresh_token,
+    })
+}
+
+pub fn needs_vk_token_refresh(settings: &crate::models::AppSettings) -> bool {
+    settings.vk_user_token.starts_with("vk2.a.")
+        && !settings.vk_refresh_token.trim().is_empty()
+        && !settings.vk_app_id.trim().is_empty()
+        && !settings.vk_service_token.trim().is_empty()
+}
+
+pub async fn refresh_access_token(
+    client: &Client,
+    app_id: &str,
+    refresh_token: &str,
+    service_token: &str,
+) -> Result<OAuthTokens> {
+    let app_id = app_id.trim();
+    let refresh_token = refresh_token.trim();
+    let service_token = service_token.trim();
+
+    if app_id.is_empty() || refresh_token.is_empty() || service_token.is_empty() {
+        bail!("Для обновления VK token нужны app_id, refresh_token и сервисный ключ");
+    }
+
+    let resp = client
+        .post(TOKEN_URL)
+        .form(&[
+            ("grant_type", "refresh_token".to_string()),
+            ("refresh_token", refresh_token.to_string()),
+            ("client_id", app_id.to_string()),
+            ("service_token", service_token.to_string()),
+        ])
+        .send()
+        .await
+        .context("VK OAuth refresh: сеть недоступна")?;
+
+    let value: Value = resp
+        .json()
+        .await
+        .context("VK OAuth refresh: некорректный ответ")?;
+
+    parse_token_response(&value).await
+}
+
+pub async fn ensure_vk_user_token_fresh(
+    client: &Client,
+    app: &AppHandle,
+    settings: &mut crate::models::AppSettings,
+) -> Result<()> {
+    if !needs_vk_token_refresh(settings) {
+        return Ok(());
+    }
+
+    let tokens = refresh_access_token(
+        client,
+        &settings.vk_app_id,
+        &settings.vk_refresh_token,
+        &settings.vk_service_token,
+    )
+    .await
+    .context(
+        "Не удалось обновить VK user token. Пройдите «Войти через VK ID» заново в настройках.",
+    )?;
+
+    settings.vk_user_token = tokens.access_token;
+    if !tokens.refresh_token.is_empty() {
+        settings.vk_refresh_token = tokens.refresh_token;
+    }
+    crate::services::settings_store::save_settings(app, settings)?;
+
+    Ok(())
+}
+
 async fn exchange_code(
     client: &Client,
     pending: &PendingVkOAuth,
@@ -249,24 +438,7 @@ async fn exchange_code(
         .await
         .context("VK OAuth: некорректный ответ")?;
 
-    if let Some(error) = value.get("error") {
-        let msg = value["error_description"]
-            .as_str()
-            .or_else(|| error.as_str())
-            .unwrap_or("OAuth error");
-        bail!("{msg}");
-    }
-
-    let access_token = value["access_token"]
-        .as_str()
-        .context("VK OAuth: нет access_token")?
-        .to_string();
-    let refresh_token = value["refresh_token"].as_str().unwrap_or("").to_string();
-
-    Ok(OAuthTokens {
-        access_token,
-        refresh_token,
-    })
+    parse_token_response(&value).await
 }
 
 pub async fn finish_oauth(
@@ -281,6 +453,57 @@ pub async fn finish_oauth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_legacy_token_from_fragment_url() {
+        let url = "https://oauth.vk.com/blank.html#access_token=vk1.a.testtoken&expires_in=0&user_id=123";
+        assert_eq!(
+            parse_legacy_token_from_pasted(url).unwrap(),
+            "vk1.a.testtoken"
+        );
+    }
+
+    #[test]
+    fn parses_legacy_token_direct_paste() {
+        assert_eq!(
+            parse_legacy_token_from_pasted("vk1.a.direct").unwrap(),
+            "vk1.a.direct"
+        );
+    }
+
+    #[test]
+    fn legacy_authorize_url_contains_implicit_flow() {
+        let url = build_legacy_authorize_url("2685278").unwrap();
+        assert!(url.contains("oauth.vk.com/authorize"));
+        assert!(url.contains("response_type=token"));
+        assert!(url.contains("client_id=2685278"));
+    }
+
+    #[test]
+    fn needs_refresh_for_vk_id_token_with_refresh() {
+        use crate::models::AppSettings;
+        let settings = AppSettings {
+            vk_user_token: "vk2.a.abc".to_string(),
+            vk_refresh_token: "vk2.a.refresh".to_string(),
+            vk_app_id: "123".to_string(),
+            vk_service_token: "secret".to_string(),
+            ..Default::default()
+        };
+        assert!(needs_vk_token_refresh(&settings));
+    }
+
+    #[test]
+    fn skips_refresh_for_legacy_token() {
+        use crate::models::AppSettings;
+        let settings = AppSettings {
+            vk_user_token: "vk1.a.abc".to_string(),
+            vk_refresh_token: "vk2.a.refresh".to_string(),
+            vk_app_id: "123".to_string(),
+            vk_service_token: "secret".to_string(),
+            ..Default::default()
+        };
+        assert!(!needs_vk_token_refresh(&settings));
+    }
 
     #[test]
     fn redirect_uri_uses_https_blank() {

@@ -83,8 +83,8 @@ pub fn is_vk_id_api_token(token: &str) -> bool {
 pub fn vk_user_token_photo_hint(token: &str) -> Option<&'static str> {
     if is_vk_id_api_token(token) {
         Some(
-            "Токен VK ID (vk2.a.*) не поддерживает загрузку фото через API. \
-             Получите user token формата vk1.a.* на vkhost.github.io с правами «Стена», «Фотографии», «Offline».",
+            "Токен VK ID (vk2.a.*) обновляется автоматически перед публикацией, \
+             если сохранён refresh token. Нужны одобренные права wall и photos в кабинете VK ID.",
         )
     } else {
         None
@@ -105,8 +105,8 @@ fn photo_upload_failure_message(settings: &AppSettings, err: &anyhow::Error) -> 
         if is_invalid_access_token_error(&detail) {
             return format!(
                 "Не удалось загрузить фото в VK: {detail}. \
-                 User token недействителен или истёк. Получите новый на vkhost.github.io \
-                 (права: wall, photos, offline) и вставьте в поле «User token»."
+                 User token недействителен или истёк. Получите новый через «Получить user token» в настройках \
+                 (права: wall, photos, offline)."
             );
         }
         return format!(
@@ -118,12 +118,12 @@ fn photo_upload_failure_message(settings: &AppSettings, err: &anyhow::Error) -> 
         return format!(
             "Не удалось загрузить фото в VK: {detail}. \
              Ключ сообщества не может загружать фото (ограничение VK API). \
-             Укажите user token в настройках — получите на vkhost.github.io с правами «Стена», «Фотографии», «Offline»."
+             Укажите user token в настройках — кнопка «Получить user token» (права «Стена», «Фотографии», «Offline»)."
         );
     }
     format!(
         "Не удалось загрузить фото в VK: {detail}. \
-         Для публикации с картинкой нужен user token (vkhost.github.io: wall + photos + offline)."
+         Для публикации с картинкой нужен user token (кнопка «Получить user token»: wall + photos + offline)."
     )
 }
 
@@ -308,10 +308,13 @@ pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTest
             }
 
             if let Some(hint) = vk_user_token_photo_hint(&settings.vk_user_token) {
-                return ApiTestResult {
-                    success: false,
-                    message: format!("Группа «{name}» найдена. {hint}"),
-                };
+                // vk2.a с refresh token проверяем через API, не блокируем заранее
+                if settings.vk_refresh_token.trim().is_empty() {
+                    return ApiTestResult {
+                        success: false,
+                        message: format!("Группа «{name}» найдена. {hint}"),
+                    };
+                }
             }
 
             let upload_token = photo_upload_token(settings, &community_token);
@@ -332,14 +335,14 @@ pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTest
                             success: false,
                             message: format!(
                                 "Группа «{name}» найдена, но user token недействителен: {e}. \
-                                 Получите новый токен на vkhost.github.io (wall + photos + offline)."
+                                 Получите новый токен через «Получить user token» (wall + photos + offline)."
                             ),
                         };
                     }
                     let scope_hint = if is_scope_error(&e.to_string()) {
                         match get_user_token_permissions(client, &upload_token).await {
                             Ok(mask) => format!(
-                                " Не хватает прав: {}. На vkhost.github.io отметьте «Фотографии» и «Стена».",
+                                " Не хватает прав: {}. В настройках VK отметьте «Фотографии» и «Стена» при получении токена.",
                                 format_missing_photo_scopes(mask)
                             ),
                             Err(_) => String::new(),
@@ -360,7 +363,7 @@ pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTest
                     message: format!(
                         "Группа «{name}» найдена, но без user token фото не загрузить. \
                          Ключ сообщества не поддерживает upload (ограничение VK). \
-                         Получите user token на vkhost.github.io (wall + photos + offline) \
+                         Получите user token кнопкой «Получить user token» (wall + photos + offline) \
                          и вставьте в поле «User token»."
                     ),
                 },

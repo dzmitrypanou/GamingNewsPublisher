@@ -210,6 +210,8 @@ pub fn run() {
             commands::test_vk,
             commands::vk_oauth_start,
             commands::vk_oauth_finish,
+            commands::vk_legacy_oauth_start,
+            commands::vk_legacy_oauth_finish,
             commands::test_telegram,
             commands::test_deepseek,
             commands::test_proxy,

@@ -40,6 +40,14 @@ export async function vkOauthFinish(pastedUrl: string): Promise<VkOAuthResult> {
   return invoke("vk_oauth_finish", { pastedUrl });
 }
 
+export async function vkLegacyOauthStart(appId: string): Promise<string> {
+  return invoke("vk_legacy_oauth_start", { appId });
+}
+
+export async function vkLegacyOauthFinish(pastedUrl: string): Promise<VkOAuthResult> {
+  return invoke("vk_legacy_oauth_finish", { pastedUrl });
+}
+
 export async function testTelegram(): Promise<ApiTestResult> {
   return invoke("test_telegram");
 }

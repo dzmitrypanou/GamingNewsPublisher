@@ -1,12 +1,24 @@
 use crate::models::{PublishResult, UnpublishResult};
-use crate::services::{ai, content_filter, data_dir, dedup_pipeline, post_text, settings_store, telegram_api, vk_api};
+use crate::services::{ai, content_filter, data_dir, dedup_pipeline, post_text, settings_store, telegram_api, vk_api, vk_oauth};
 use crate::AppState;
 use anyhow::Result;
 use chrono::Utc;
 
 pub async fn do_publish(state: &AppState, id: i64) -> Result<PublishResult> {
     let mut post = state.db.get_post(id)?;
-    let settings = settings_store::load_settings(&state.app_handle)?;
+    let mut settings = settings_store::load_settings(&state.app_handle)?;
+
+    if vk_oauth::needs_vk_token_refresh(&settings) {
+        if let Err(e) = vk_oauth::ensure_vk_user_token_fresh(
+            &state.http_client(),
+            &state.app_handle,
+            &mut settings,
+        )
+        .await
+        {
+            anyhow::bail!("VK: {e}");
+        }
+    }
 
     let title = post
         .ai_title

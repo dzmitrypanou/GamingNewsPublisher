@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileUp, FolderOpen, ImageIcon, Link2, Loader2, Pause, RotateCcw, Save, TestTube, Trash2, Upload, Download, X } from "lucide-react";
+import { ChevronDown, FileUp, FolderOpen, ImageIcon, Link2, Loader2, Pause, RotateCcw, Save, TestTube, Trash2, Upload, Download, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -17,6 +17,8 @@ import {
   testVk,
   vkOauthStart,
   vkOauthFinish,
+  vkLegacyOauthStart,
+  vkLegacyOauthFinish,
   testTelegram,
   testDeepseek,
   testProxy,
@@ -41,6 +43,97 @@ import type { AppSettings, ApiTestResult, LocalModelInfo, LocalModelsOverview, V
 import { cn, countProxyLines, mergeProxyLists } from "@/lib/utils";
 import { WatermarkEditor } from "@/components/settings/WatermarkEditor";
 import { ScheduleDateTimePicker } from "@/components/ui/schedule-datetime-picker";
+
+const VK_LEGACY_APPS = [
+  { id: "2685278", name: "Kate Mobile (рекомендуется)" },
+  { id: "6121396", name: "VK Admin" },
+  { id: "6287487", name: "vk.com" },
+  { id: "4083558", name: "VFeed" },
+  { id: "3698024", name: "Instagram" },
+] as const;
+
+type VkOAuthAppOption = { id: string; name: string };
+
+function VkOAuthAppSelect({
+  value,
+  onChange,
+  customAppId,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  customAppId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const options = useMemo(() => {
+    const list: VkOAuthAppOption[] = VK_LEGACY_APPS.map((app) => ({
+      id: app.id,
+      name: app.name,
+    }));
+    const trimmed = customAppId?.trim();
+    if (trimmed) {
+      list.push({ id: trimmed, name: `Моё приложение (${trimmed})` });
+    }
+    return list;
+  }, [customAppId]);
+
+  const selected =
+    options.find((option) => option.id === value) ?? options[0] ?? { id: "", name: "—" };
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative w-full">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm shadow-sm transition-colors hover:bg-accent/40"
+      >
+        <span className="truncate">{selected.name}</span>
+        <ChevronDown
+          className={cn("h-4 w-4 shrink-0 opacity-50 transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 max-h-56 overflow-y-auto rounded-md border border-input bg-background py-1 shadow-lg"
+        >
+          {options.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              role="option"
+              aria-selected={value === option.id}
+              onClick={() => {
+                onChange(option.id);
+                setOpen(false);
+              }}
+              className={cn(
+                "flex w-full px-3 py-2 text-left text-sm transition-colors hover:bg-accent",
+                value === option.id && "bg-accent font-medium text-foreground",
+              )}
+            >
+              {option.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const DEFAULT_PROMPT = `Переведи игровую новость на {language} и перепиши для соцсетей VK и Telegram.
 Если исходный текст на другом языке — переведи. Если уже на {language} — перепиши живым языком для соцсетей.
@@ -162,6 +255,10 @@ export function Settings() {
   const [vkOauthWaitingUrl, setVkOauthWaitingUrl] = useState(false);
   const [vkOauthPaste, setVkOauthPaste] = useState("");
   const [vkOauthResult, setVkOauthResult] = useState<VkOAuthResult | null>(null);
+  const [vkLegacyAppId, setVkLegacyAppId] = useState("2685278");
+  const [vkLegacyWaitingUrl, setVkLegacyWaitingUrl] = useState(false);
+  const [vkLegacyPaste, setVkLegacyPaste] = useState("");
+  const [vkLegacyLoading, setVkLegacyLoading] = useState(false);
 
   const formatGb = (bytes: number) => {
     if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} ГБ`;
@@ -816,6 +913,38 @@ export function Settings() {
     }
   };
 
+  const handleVkLegacyStart = async () => {
+    setVkLegacyLoading(true);
+    setVkOauthResult(null);
+    setVkLegacyPaste("");
+    try {
+      await vkLegacyOauthStart(vkLegacyAppId);
+      setVkLegacyWaitingUrl(true);
+    } catch (e) {
+      setVkOauthResult({ success: false, message: String(e) });
+      setVkLegacyWaitingUrl(false);
+    } finally {
+      setVkLegacyLoading(false);
+    }
+  };
+
+  const handleVkLegacyFinish = async () => {
+    setVkLegacyLoading(true);
+    setVkOauthResult(null);
+    try {
+      const result = await vkLegacyOauthFinish(vkLegacyPaste.trim());
+      setVkOauthResult(result);
+      setVkLegacyWaitingUrl(false);
+      setVkLegacyPaste("");
+      const fresh = await getSettings();
+      setSettings(fresh);
+    } catch (e) {
+      setVkOauthResult({ success: false, message: String(e) });
+    } finally {
+      setVkLegacyLoading(false);
+    }
+  };
+
   const handleVkOAuthStart = async () => {
     setVkOauthing(true);
     setVkOauthResult(null);
@@ -1116,12 +1245,91 @@ export function Settings() {
                   />
                   <p className="text-xs text-muted-foreground">
                     Для загрузки фото нужен user token формата{" "}
-                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">vk1.a.*</code>{" "}
-                    с vkhost.github.io (Стена + Фотографии + Offline). Токен VK ID (
+                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">vk1.a.*</code>.
+                    Токен VK ID (
                     <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">vk2.a.*</code>)
-                    из «Войти через VK» не работает с api.vk.com для фото.
+                    обновляется автоматически, если пройден «Войти через VK ID» и сохранён refresh
+                    token.
                   </p>
-                  <div className="flex flex-wrap items-center gap-2">
+                  <div className="space-y-2">
+                    <div className="space-y-1">
+                      <Label className="text-[11px] text-muted-foreground">
+                        Приложение для OAuth
+                      </Label>
+                      <VkOAuthAppSelect
+                        value={vkLegacyAppId}
+                        onChange={setVkLegacyAppId}
+                        customAppId={settings.vk_app_id}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleVkLegacyStart}
+                      disabled={vkLegacyLoading || vkLegacyWaitingUrl}
+                    >
+                      {vkLegacyLoading && !vkLegacyWaitingUrl ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Получить user token
+                    </Button>
+                  </div>
+                  {vkLegacyWaitingUrl && (
+                    <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        В браузере нажмите «Разрешить». Откроется{" "}
+                        <code className="rounded bg-secondary px-1">oauth.vk.com/blank.html</code>{" "}
+                        с предупреждением — это нормально. Скопируйте{" "}
+                        <strong className="font-medium text-foreground">полный адрес</strong> из
+                        строки браузера (должен содержать{" "}
+                        <code className="rounded bg-secondary px-1">access_token=vk1.a.</code>
+                        ) и вставьте ниже.
+                      </p>
+                      <Textarea
+                        value={vkLegacyPaste}
+                        onChange={(e) => setVkLegacyPaste(e.target.value)}
+                        placeholder="https://oauth.vk.com/blank.html#access_token=vk1.a....&expires_in=0&user_id=..."
+                        rows={3}
+                        className="text-xs"
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleVkLegacyFinish}
+                          disabled={vkLegacyLoading || !vkLegacyPaste.trim()}
+                        >
+                          {vkLegacyLoading ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          ) : null}
+                          Готово
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setVkLegacyWaitingUrl(false);
+                            setVkLegacyPaste("");
+                          }}
+                        >
+                          Отмена
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                  <details className="rounded-lg border border-border bg-secondary/10 p-3 text-xs">
+                    <summary className="cursor-pointer font-medium text-muted-foreground">
+                      VK ID OAuth (официальный путь, токен обновляется автоматически)
+                    </summary>
+                    <div className="mt-3 space-y-2">
+                      <p className="leading-relaxed text-muted-foreground">
+                        Выдаёт токен <code className="rounded bg-secondary px-1">vk2.a.*</code>{" "}
+                        (живёт ~60 мин) и refresh token (~180 дней). Перед публикацией приложение
+                        само обновит access token, если сохранены app ID, сервисный ключ и refresh
+                        token. Нужны одобренные права wall и photos в кабинете VK ID.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
@@ -1137,20 +1345,9 @@ export function Settings() {
                       {vkOauthing && !vkOauthWaitingUrl ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                       ) : null}
-                      Войти через VK
+                      Войти через VK ID
                     </Button>
-                    <span className="text-xs text-muted-foreground">
-                      или вручную через{" "}
-                      <a
-                        href="https://vkhost.github.io/"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[#0077FF] underline underline-offset-2 hover:opacity-80"
-                      >
-                        vkhost.github.io
-                      </a>
-                    </span>
-                  </div>
+                      </div>
                   {vkOauthWaitingUrl && (
                     <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
                       <p className="text-xs leading-relaxed text-muted-foreground">
@@ -1195,6 +1392,8 @@ export function Settings() {
                       </div>
                     </div>
                   )}
+                    </div>
+                  </details>
                   {vkOauthResult && (
                     <p
                       className={cn(

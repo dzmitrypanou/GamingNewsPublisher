@@ -44,7 +44,39 @@ pub fn save_settings(
 
 #[tauri::command]
 pub async fn test_vk(state: State<'_, std::sync::Arc<AppState>>) -> Result<ApiTestResult, String> {
-    let settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+    let mut settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+
+    if vk_oauth::needs_vk_token_refresh(&settings) {
+        match vk_oauth::ensure_vk_user_token_fresh(
+            &state.http_client(),
+            &state.app_handle,
+            &mut settings,
+        )
+        .await
+        {
+            Ok(()) => {
+                let mut result =
+                    vk_api::test_connection(&state.http_client(), &settings).await;
+                if result.success {
+                    result.message = format!(
+                        "User token обновлён (VK ID). {}",
+                        result.message
+                    );
+                }
+                return Ok(result);
+            }
+            Err(e) => {
+                return Ok(ApiTestResult {
+                    success: false,
+                    message: format!(
+                        "Не удалось обновить VK user token: {e}. \
+                         Пройдите «Войти через VK ID» заново."
+                    ),
+                });
+            }
+        }
+    }
+
     Ok(vk_api::test_connection(&state.http_client(), &settings).await)
 }
 
@@ -118,11 +150,57 @@ pub async fn vk_oauth_finish(
         "User token и refresh token получены и сохранены.".to_string()
     };
     if let Some(hint) = vk_api::vk_user_token_photo_hint(&settings.vk_user_token) {
-        message = format!("{message} {hint}");
+        if settings.vk_refresh_token.is_empty() {
+            message = format!("{message} {hint}");
+        } else {
+            message = format!(
+                "{message} Токен VK ID будет автоматически обновляться перед публикацией."
+            );
+        }
     }
 
     Ok(VkOAuthResult {
         success: true,
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn vk_legacy_oauth_start(
+    state: State<'_, std::sync::Arc<AppState>>,
+    app_id: String,
+) -> Result<String, String> {
+    vk_oauth::begin_legacy_oauth(&state.app_handle, &app_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn vk_legacy_oauth_finish(
+    state: State<'_, std::sync::Arc<AppState>>,
+    pasted_url: String,
+) -> Result<VkOAuthResult, String> {
+    let access_token = vk_oauth::parse_legacy_token_from_pasted(&pasted_url)
+        .map_err(|e| e.to_string())?;
+
+    let mut settings = settings_store::load_settings(&state.app_handle).map_err(|e| e.to_string())?;
+    settings.vk_user_token = access_token.clone();
+    settings_store::save_settings(&state.app_handle, &settings).map_err(|e| e.to_string())?;
+
+    let mut message = if access_token.starts_with("vk1.a.") {
+        "User token (vk1.a.*) получен и сохранён. Публикация с фото должна работать.".to_string()
+    } else if access_token.starts_with("vk2.a.") {
+        "Токен сохранён, но формат vk2.a.* не подходит для загрузки фото. \
+         Попробуйте другое приложение из списка (Kate Mobile, VK Admin)."
+            .to_string()
+    } else {
+        "User token получен и сохранён.".to_string()
+    };
+
+    if let Some(hint) = vk_api::vk_user_token_photo_hint(&access_token) {
+        message = format!("{message} {hint}");
+    }
+
+    Ok(VkOAuthResult {
+        success: !access_token.starts_with("vk2.a."),
         message,
     })
 }
