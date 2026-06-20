@@ -17,6 +17,7 @@ import type {
   RssPreviewItem,
   LocalModelsOverview,
   Source,
+  VkOAuthResult,
 } from "./types";
 
 export async function getSettings(): Promise<AppSettings> {
@@ -29,6 +30,10 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
 
 export async function testVk(): Promise<ApiTestResult> {
   return invoke("test_vk");
+}
+
+export async function vkOauthAuthorize(): Promise<VkOAuthResult> {
+  return invoke("vk_oauth_authorize");
 }
 
 export async function testTelegram(): Promise<ApiTestResult> {

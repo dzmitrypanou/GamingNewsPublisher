@@ -15,6 +15,7 @@ import {
   importBackup,
   pickBackupDirectory,
   testVk,
+  vkOauthAuthorize,
   testTelegram,
   testDeepseek,
   testProxy,
@@ -35,7 +36,7 @@ import {
 } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { dialog } from "@/lib/dialog";
-import type { AppSettings, ApiTestResult, LocalModelInfo, LocalModelsOverview } from "@/lib/types";
+import type { AppSettings, ApiTestResult, LocalModelInfo, LocalModelsOverview, VkOAuthResult } from "@/lib/types";
 import { cn, countProxyLines, mergeProxyLists } from "@/lib/utils";
 import { WatermarkEditor } from "@/components/settings/WatermarkEditor";
 import { ScheduleDateTimePicker } from "@/components/ui/schedule-datetime-picker";
@@ -58,6 +59,9 @@ const DEFAULT_PROMPT = `Переведи игровую новость на {lan
 const defaultSettings: AppSettings = {
   vk_token: "",
   vk_user_token: "",
+  vk_app_id: "",
+  vk_service_token: "",
+  vk_refresh_token: "",
   vk_group_id: "",
   telegram_bot_token: "",
   telegram_channel_id: "",
@@ -153,6 +157,8 @@ export function Settings() {
   const [addingCustomModel, setAddingCustomModel] = useState(false);
   const [showCustomModelForm, setShowCustomModelForm] = useState(false);
   const [regeneratingQueueImages, setRegeneratingQueueImages] = useState(false);
+  const [vkOauthing, setVkOauthing] = useState(false);
+  const [vkOauthResult, setVkOauthResult] = useState<VkOAuthResult | null>(null);
 
   const formatGb = (bytes: number) => {
     if (bytes >= 1_073_741_824) return `${(bytes / 1_073_741_824).toFixed(1)} ГБ`;
@@ -807,6 +813,22 @@ export function Settings() {
     }
   };
 
+  const handleVkOAuth = async () => {
+    setVkOauthing(true);
+    setVkOauthResult(null);
+    try {
+      await saveSettings(settings);
+      const result = await vkOauthAuthorize();
+      setVkOauthResult(result);
+      const fresh = await getSettings();
+      setSettings(fresh);
+    } catch (e) {
+      setVkOauthResult({ success: false, message: String(e) });
+    } finally {
+      setVkOauthing(false);
+    }
+  };
+
   const handleRegenerateQueueImages = async () => {
     if (
       !(await dialog.confirm(
@@ -1009,6 +1031,46 @@ export function Settings() {
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-3">
                 <p className="text-sm font-medium text-[#0077FF]">VKontakte</p>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Для постов с фото: ключ сообщества публикует пост, user token загружает
+                  картинку. User token можно получить кнопкой ниже через ваше приложение VK ID.
+                </p>
+                <div className="space-y-2">
+                  <Label className="text-xs">ID приложения</Label>
+                  <Input
+                    value={settings.vk_app_id}
+                    onChange={(e) => update("vk_app_id", e.target.value)}
+                    placeholder="12345678"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-xs">Сервисный ключ доступа</Label>
+                  <Input
+                    type="password"
+                    value={settings.vk_service_token}
+                    onChange={(e) => update("vk_service_token", e.target.value)}
+                    placeholder="из кабинета VK ID"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    В{" "}
+                    <a
+                      href="https://id.vk.com/about/business/go"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[#0077FF] underline underline-offset-2 hover:opacity-80"
+                    >
+                      кабинете VK ID
+                    </a>{" "}
+                    при создании Web-приложения укажите: базовый домен{" "}
+                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">localhost</code>
+                    , redirect URI{" "}
+                    <code className="rounded bg-secondary px-1 py-0.5 text-[11px]">
+                      https://localhost
+                    </code>
+                    . IP-адрес и порт в URL VK не принимает. Для кнопки «Войти через VK» может
+                    понадобиться запуск приложения от имени администратора (порт 443).
+                  </p>
+                </div>
                 <div className="space-y-2">
                   <Label className="text-xs">Ключ сообщества</Label>
                   <Input
@@ -1017,15 +1079,57 @@ export function Settings() {
                     onChange={(e) => update("vk_token", e.target.value)}
                     placeholder="vk1.a...."
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Сообщество → Управление → Работа с API → «Создать ключ» (права: wall, photos,
+                    groups).
+                  </p>
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs">User token (для фото)</Label>
+                  <Label className="text-xs">User token</Label>
                   <Input
                     type="password"
                     value={settings.vk_user_token}
                     onChange={(e) => update("vk_user_token", e.target.value)}
-                    placeholder="vk1.a.... (необязательно)"
+                    placeholder="заполнится после входа через VK"
                   />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleVkOAuth}
+                      disabled={vkOauthing || !settings.vk_app_id.trim() || !settings.vk_service_token.trim()}
+                    >
+                      {vkOauthing ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Войти через VK
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      или вручную через{" "}
+                      <a
+                        href="https://vkhost.github.io/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[#0077FF] underline underline-offset-2 hover:opacity-80"
+                      >
+                        vkhost.github.io
+                      </a>
+                    </span>
+                  </div>
+                  {vkOauthResult && (
+                    <p
+                      className={cn(
+                        "text-xs",
+                        vkOauthResult.success ? "text-green-500" : "text-destructive",
+                      )}
+                    >
+                      {vkOauthResult.message}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Авторизуйтесь аккаунтом администратора или редактора группы.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label className="text-xs">ID группы</Label>

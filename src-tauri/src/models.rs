@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 pub struct AppSettings {
     pub vk_token: String,
     pub vk_user_token: String,
+    pub vk_app_id: String,
+    pub vk_service_token: String,
+    pub vk_refresh_token: String,
     pub vk_group_id: String,
     pub telegram_bot_token: String,
     pub telegram_channel_id: String,
@@ -79,6 +82,9 @@ impl Default for AppSettings {
         Self {
             vk_token: String::new(),
             vk_user_token: String::new(),
+            vk_app_id: String::new(),
+            vk_service_token: String::new(),
+            vk_refresh_token: String::new(),
             vk_group_id: String::new(),
             telegram_bot_token: String::new(),
             telegram_channel_id: String::new(),
@@ -409,6 +415,12 @@ pub struct DashboardStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiTestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VkOAuthResult {
     pub success: bool,
     pub message: String,
 }

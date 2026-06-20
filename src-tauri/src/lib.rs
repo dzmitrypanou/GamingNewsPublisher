@@ -206,6 +206,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::test_vk,
+            commands::vk_oauth_authorize,
             commands::test_telegram,
             commands::test_deepseek,
             commands::test_proxy,

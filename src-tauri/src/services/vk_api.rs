@@ -1,5 +1,6 @@
 use crate::models::{ApiTestResult, AppSettings};
 use crate::services::image_loader;
+use crate::services::post_text;
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde_json::Value;
@@ -72,6 +73,27 @@ fn photo_upload_token(settings: &AppSettings, community_token: &str) -> String {
 
 fn has_user_photo_token(settings: &AppSettings) -> bool {
     !settings.vk_user_token.trim().is_empty()
+}
+
+fn photo_upload_failure_message(settings: &AppSettings, err: &anyhow::Error) -> String {
+    let detail = err.to_string();
+    if has_user_photo_token(settings) {
+        return format!(
+            "Не удалось загрузить фото в VK: {detail}. \
+             Проверьте права user token (wall, photos, offline) и что аккаунт — админ/редактор группы."
+        );
+    }
+    if is_group_auth_photo_error(&detail) || is_scope_error(&detail) {
+        return format!(
+            "Не удалось загрузить фото в VK: {detail}. \
+             Ключ сообщества не может загружать фото (ограничение VK API). \
+             Укажите user token в настройках — получите на vkhost.github.io с правами «Стена», «Фотографии», «Offline»."
+        );
+    }
+    format!(
+        "Не удалось загрузить фото в VK: {detail}. \
+         Для публикации с картинкой нужен user token (vkhost.github.io: wall + photos + offline)."
+    )
 }
 
 fn json_to_api_string(value: &Value) -> String {
@@ -178,6 +200,31 @@ fn link_attachment(url: Option<&str>) -> Option<String> {
     }
 }
 
+/// VK 2025: a link in `attachments` requires a photo (`link_photo_sizing_rule`).
+fn build_attachments(photo: Option<String>, link_url: Option<&str>) -> Option<String> {
+    match (photo, link_attachment(link_url)) {
+        (Some(photo), Some(link)) => Some(format!("{photo},{link}")),
+        (Some(photo), None) => Some(photo),
+        (None, Some(_)) => None,
+        (None, None) => None,
+    }
+}
+
+fn append_link_to_message(message: &str, link_url: Option<&str>) -> String {
+    let Some(url) = link_attachment(link_url) else {
+        return message.to_string();
+    };
+    if post_text::contains_url(message) {
+        return message.to_string();
+    }
+    let msg = message.trim();
+    if msg.is_empty() {
+        url
+    } else {
+        format!("{msg}\n\n{url}")
+    }
+}
+
 const PERM_PHOTOS: u64 = 4;
 const PERM_WALL: u64 = 8192;
 
@@ -234,12 +281,12 @@ pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTest
                 Ok(()) if has_user_photo_token(settings) => ApiTestResult {
                     success: true,
                     message: format!(
-                        "Подключено: {name}. Ключ сообщества — публикация, user token — загрузка фото."
+                        "Подключено: {name}. Публикация с фото доступна (user token настроен)."
                     ),
                 },
                 Ok(()) => ApiTestResult {
                     success: true,
-                    message: format!("Подключено: {name}. Публикация текста и фото доступна."),
+                    message: format!("Подключено: {name}. Публикация с фото доступна."),
                 },
                 Err(e) if has_user_photo_token(settings) => {
                     let scope_hint = if is_scope_error(&e.to_string()) {
@@ -254,19 +301,20 @@ pub async fn test_connection(client: &Client, settings: &AppSettings) -> ApiTest
                         String::new()
                     };
                     ApiTestResult {
-                        success: true,
+                        success: false,
                         message: format!(
-                            "Подключено: {name}. Текст на стене — OK.{scope_hint} \
-                             Фото через upload недоступно — посты будут с превью по ссылке на статью."
+                            "Группа «{name}» найдена, но upload фото недоступен: {e}.{scope_hint} \
+                             Укажите user token с правами wall и photos."
                         ),
                     }
                 }
                 Err(e) if is_group_auth_photo_error(&e.to_string()) => ApiTestResult {
-                    success: true,
+                    success: false,
                     message: format!(
-                        "Подключено: {name}. Текст на стене — OK. \
-                         Для upload фото укажите user token (vkhost.github.io: wall + photos + offline). \
-                         Без него — превью по ссылке на статью."
+                        "Группа «{name}» найдена, но без user token фото не загрузить. \
+                         Ключ сообщества не поддерживает upload (ограничение VK). \
+                         Получите user token на vkhost.github.io (wall + photos + offline) \
+                         и вставьте в поле «User token»."
                     ),
                 },
                 Err(e) => ApiTestResult {
@@ -297,26 +345,26 @@ pub async fn publish_post(
     let upload_token = photo_upload_token(settings, &community_token);
     let owner_id = format!("-{group_id}");
 
-    let mut attachment = if let Some(img_url) = image_url {
-        match upload_photo(client, &upload_token, &group_id, img_url, data_dir).await {
-            Ok(att) => Some(att),
-            Err(e) => {
-                eprintln!("VK photo upload skipped: {e}");
-                None
-            }
-        }
+    let photo_attachment = if let Some(img_url) = image_url {
+        upload_photo(client, &upload_token, &group_id, img_url, data_dir)
+            .await
+            .map(Some)
+            .map_err(|e| anyhow::anyhow!(photo_upload_failure_message(settings, &e)))?
     } else {
         None
     };
 
-    if attachment.is_none() {
-        attachment = link_attachment(link_url);
-    }
+    let attachment = build_attachments(photo_attachment, link_url);
+    let wall_message = if attachment.is_none() {
+        append_link_to_message(message, link_url)
+    } else {
+        message.to_string()
+    };
 
     let mut params = vec![
         ("owner_id", owner_id),
         ("from_group", "1".to_string()),
-        ("message", message.to_string()),
+        ("message", wall_message),
         ("access_token", community_token),
     ];
 
@@ -520,6 +568,42 @@ mod tests {
             Some("https://example.com/news".to_string())
         );
         assert!(link_attachment(Some("not-a-url")).is_none());
+    }
+
+    #[test]
+    fn link_only_attachment_is_not_allowed() {
+        assert!(build_attachments(
+            None,
+            Some("https://example.com/news")
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn photo_and_link_combined_in_attachments() {
+        assert_eq!(
+            build_attachments(
+                Some("photo-1_2".to_string()),
+                Some("https://example.com/news")
+            ),
+            Some("photo-1_2,https://example.com/news".to_string())
+        );
+    }
+
+    #[test]
+    fn appends_source_link_when_no_photo() {
+        let msg = append_link_to_message("Заголовок\n\nТекст", Some("https://example.com/news"));
+        assert!(msg.contains("https://example.com/news"));
+        assert!(msg.starts_with("Заголовок"));
+    }
+
+    #[test]
+    fn does_not_duplicate_link_in_message() {
+        let msg = append_link_to_message(
+            "Уже есть https://example.com/other",
+            Some("https://example.com/news"),
+        );
+        assert_eq!(msg, "Уже есть https://example.com/other");
     }
 
     #[test]

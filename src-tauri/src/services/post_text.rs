@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn removes_sentence_with_youtube_link() {
-        let input = "Текст о игре. Смотрите трейлер: https:
+        let input = "Текст о игре. Смотрите трейлер: https://youtu.be/abc123";
         let output = format_post_text(input);
         assert_eq!(output, "Текст о игре.");
     }

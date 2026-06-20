@@ -536,7 +536,7 @@ mod tests {
     #[test]
     fn site_referer_extracts_origin() {
         assert_eq!(
-            site_referer("https:
+            site_referer("https://www.example.com/article").as_deref(),
             Some("https://www.example.com/")
         );
         assert_eq!(
@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn ign_feed_extracts_image_from_content_encoded() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http:
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
             <channel><item>
                 <title>Warhammer</title>
                 <description></description>
@@ -557,7 +557,7 @@ mod tests {
         let url = extract_image_from_entry(&channel.items()[0]);
         assert_eq!(
             url.as_deref(),
-            Some("https:
+            Some("https://assets-prd.ignimgs.com/2026/06/05/dark-heresy-1780691362412.jpg")
         );
     }
 
@@ -567,19 +567,19 @@ mod tests {
             <rss version="2.0"><channel><item>
                 <title>Sample article</title>
                 <link>https://example.com/article/</link>
-                <enclosure url="https:
+                <enclosure url="https://example.com/uploads/test.jpg" type="image/jpeg"/>
             </item></channel></rss>"#;
         let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
         let url = extract_image_from_entry(&channel.items()[0]);
         assert_eq!(
             url.as_deref(),
-            Some("https:
+            Some("https://example.com/uploads/test.jpg")
         );
     }
 
     #[test]
     fn feed_extracts_media_thumbnail() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http:
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
             <channel><item>
                 <title>Test</title>
                 <media:thumbnail url="https://example.com/uploads/test.jpg" />
@@ -588,13 +588,13 @@ mod tests {
         let url = extract_image_from_entry(&channel.items()[0]);
         assert_eq!(
             url.as_deref(),
-            Some("https:
+            Some("https://example.com/uploads/test.jpg")
         );
     }
 
     #[test]
     fn quanta_feed_extracts_media_content_images() {
-        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http:
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
             <channel><item>
                 <title>WebP item</title>
                 <media:content url="https://example.com/image.webp" type="image/jpg"/>
@@ -604,7 +604,7 @@ mod tests {
             </item></channel></rss>"#;
         let channel = Channel::read_from(xml.as_bytes()).expect("parse feed");
         let webp = extract_image_from_entry(&channel.items()[0]);
-        assert_eq!(webp.as_deref(), Some("https:
+        assert_eq!(webp.as_deref(), Some("https://example.com/image.webp"));
         let jpg = extract_image_from_entry(&channel.items()[1]);
         assert_eq!(jpg.as_deref(), Some("https://example.com/image.jpg"));
     }

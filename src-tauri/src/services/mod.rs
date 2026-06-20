@@ -21,3 +21,4 @@ pub mod content_filter;
 pub mod web_context;
 pub mod telegram_api;
 pub mod vk_api;
+pub mod vk_oauth;

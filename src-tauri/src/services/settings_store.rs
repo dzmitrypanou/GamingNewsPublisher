@@ -65,6 +65,18 @@ pub fn load_settings(app: &AppHandle) -> Result<AppSettings> {
             .get("vk_user_token")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_default(),
+        vk_app_id: store
+            .get("vk_app_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        vk_service_token: store
+            .get("vk_service_token")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
+        vk_refresh_token: store
+            .get("vk_refresh_token")
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default(),
         vk_group_id: store
             .get("vk_group_id")
             .and_then(|v| v.as_str().map(String::from))
@@ -445,6 +457,9 @@ pub fn save_settings(app: &AppHandle, settings: &AppSettings) -> Result<()> {
     let store = app.store(data_dir::settings_path(&data_dir))?;
     store.set("vk_token", serde_json::json!(settings.vk_token));
     store.set("vk_user_token", serde_json::json!(settings.vk_user_token));
+    store.set("vk_app_id", serde_json::json!(settings.vk_app_id));
+    store.set("vk_service_token", serde_json::json!(settings.vk_service_token));
+    store.set("vk_refresh_token", serde_json::json!(settings.vk_refresh_token));
     store.set("vk_group_id", serde_json::json!(settings.vk_group_id));
     store.set(
         "telegram_bot_token",

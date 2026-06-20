@@ -1,6 +1,9 @@
 export interface AppSettings {
   vk_token: string;
   vk_user_token: string;
+  vk_app_id: string;
+  vk_service_token: string;
+  vk_refresh_token: string;
   vk_group_id: string;
   telegram_bot_token: string;
   telegram_channel_id: string;
@@ -286,6 +289,11 @@ export interface LocalModelsOverview {
 export type LocalLlmStatus = LocalModelsOverview;
 
 export interface ApiTestResult {
+  success: boolean;
+  message: string;
+}
+
+export interface VkOAuthResult {
   success: boolean;
   message: string;
 }
